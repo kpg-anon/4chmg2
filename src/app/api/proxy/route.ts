@@ -65,7 +65,7 @@ export async function GET(request: NextRequest) {
         const imageBuffer = await fetchImage(url);
         const contentType = getContentType(url);
 
-        return new NextResponse(imageBuffer as Buffer, {
+        return new NextResponse(new Uint8Array(imageBuffer), {
             status: 200,
             headers: {
                 'Content-Type': contentType,
