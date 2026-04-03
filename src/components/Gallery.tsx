@@ -119,6 +119,14 @@ const SOURCE_FAVICONS: Record<string, string> = {
     easychan: 'https://easychan.net/assets/favicons/favicon.ico',
 };
 
+// requestVideoFrameCallback is not yet in TypeScript's lib.dom.d.ts
+interface VideoWithRVFC extends HTMLVideoElement {
+    requestVideoFrameCallback(
+        callback: (now: DOMHighResTimeStamp, meta: { mediaTime: number }) => void
+    ): number;
+    cancelVideoFrameCallback(id: number): void;
+}
+
 export default function Gallery({ media, initialSelectedIndex, newItemIds }: GalleryProps) {
     const [selectedIndex, setSelectedIndex] = useState<number | null>(initialSelectedIndex ?? null);
     const lastViewedIndexRef = useRef<number | null>(null);
@@ -180,6 +188,7 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
     const videoWrapperRef = useRef<HTMLDivElement>(null);
     const [speedOverlay, setSpeedOverlay] = useState<{ text: string; key: number } | null>(null);
     const speedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const [selectedVideoSrc, setSelectedVideoSrc] = useState('');
 
     useEffect(() => { setPortalTarget(document.body); }, []);
 
@@ -213,10 +222,10 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
                 if (delta > 0 && delta < 0.2) frameDurationRef.current = delta;
             }
             lastFrameTimeRef.current = meta.mediaTime;
-            id = (video as any).requestVideoFrameCallback(onFrame);
+            id = (video as VideoWithRVFC).requestVideoFrameCallback(onFrame);
         };
-        id = (video as any).requestVideoFrameCallback(onFrame);
-        return () => (video as any).cancelVideoFrameCallback(id);
+        id = (video as VideoWithRVFC).requestVideoFrameCallback(onFrame);
+        return () => (video as VideoWithRVFC).cancelVideoFrameCallback(id);
     }, [selectedIndex, isVideoPaused]);
 
     useEffect(() => {
@@ -262,54 +271,6 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
         return () => { if (overlayTimeoutRef.current) clearTimeout(overlayTimeoutRef.current); };
     }, [isFullscreen, isPlaying, isEditingInterval]);
 
-    // Slideshow timer — waits for media to load, skips timer for videos (uses onEnded instead)
-    useEffect(() => {
-        if (slideshowTimerRef.current) { clearTimeout(slideshowTimerRef.current); slideshowTimerRef.current = null; }
-        if (isPlaying && selectedIndex !== null && mediaLoaded) {
-            const currentItem = media[selectedIndex];
-            const isVideo = currentItem && VIDEO_EXTS.includes(currentItem.ext);
-            if (!isVideo) {
-                slideshowTimerRef.current = setTimeout(() => {
-                    setSelectedIndex(prev => prev === null ? null : (prev + 1) % media.length);
-                    resetTransform();
-                }, slideshowInterval * 1000);
-            }
-        }
-        return () => { if (slideshowTimerRef.current) clearTimeout(slideshowTimerRef.current); };
-    }, [isPlaying, selectedIndex, media, slideshowInterval, mediaLoaded]);
-
-    // Precache upcoming media — fetches next 3 items as blobs for videos, Image() for images
-    useEffect(() => {
-        if (selectedIndex === null || media.length === 0) return;
-        const LOOKAHEAD = 3;
-        for (let i = 1; i <= LOOKAHEAD; i++) {
-            const idx: number = (selectedIndex + i) % media.length;
-            if (idx === selectedIndex) continue;
-            const item = media[idx];
-            const url = proxyUrl(item.url);
-            if (precacheRef.current.has(url)) continue;
-            precacheRef.current.add(url);
-            const isVideo = VIDEO_EXTS.includes(item.ext);
-            if (isVideo) {
-                fetch(url)
-                    .then(res => res.blob())
-                    .then(blob => { blobCacheRef.current.set(url, URL.createObjectURL(blob)); })
-                    .catch(() => {});
-            } else {
-                const img = new Image();
-                img.src = url;
-            }
-        }
-    }, [selectedIndex, media]);
-
-    // Revoke blob URLs on unmount
-    useEffect(() => {
-        return () => {
-            blobCacheRef.current.forEach(url => URL.revokeObjectURL(url));
-            blobCacheRef.current.clear();
-        };
-    }, []);
-
     const applyTransform = useCallback(() => {
         if (transformRef.current) {
             transformRef.current.style.transform = `scale(${zoomRef.current}) translate(${panRef.current.x}px, ${panRef.current.y}px)`;
@@ -351,6 +312,55 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
             if (mediaRotateRef.current) mediaRotateRef.current.style.transition = 'transform 0.15s ease-out';
         });
     }, [applyTransform]);
+
+    // Slideshow timer — waits for media to load, skips timer for videos (uses onEnded instead)
+    useEffect(() => {
+        if (slideshowTimerRef.current) { clearTimeout(slideshowTimerRef.current); slideshowTimerRef.current = null; }
+        if (isPlaying && selectedIndex !== null && mediaLoaded) {
+            const currentItem = media[selectedIndex];
+            const isVideo = currentItem && VIDEO_EXTS.includes(currentItem.ext);
+            if (!isVideo) {
+                slideshowTimerRef.current = setTimeout(() => {
+                    setSelectedIndex(prev => prev === null ? null : (prev + 1) % media.length);
+                    resetTransform();
+                }, slideshowInterval * 1000);
+            }
+        }
+        return () => { if (slideshowTimerRef.current) clearTimeout(slideshowTimerRef.current); };
+    }, [isPlaying, selectedIndex, media, slideshowInterval, mediaLoaded, resetTransform]);
+
+    // Precache upcoming media — fetches next 3 items as blobs for videos, Image() for images
+    useEffect(() => {
+        if (selectedIndex === null || media.length === 0) return;
+        const LOOKAHEAD = 3;
+        for (let i = 1; i <= LOOKAHEAD; i++) {
+            const idx: number = (selectedIndex + i) % media.length;
+            if (idx === selectedIndex) continue;
+            const item = media[idx];
+            const url = proxyUrl(item.url);
+            if (precacheRef.current.has(url)) continue;
+            precacheRef.current.add(url);
+            const isVideo = VIDEO_EXTS.includes(item.ext);
+            if (isVideo) {
+                fetch(url)
+                    .then(res => res.blob())
+                    .then(blob => { blobCacheRef.current.set(url, URL.createObjectURL(blob)); })
+                    .catch(() => {});
+            } else {
+                const img = new Image();
+                img.src = url;
+            }
+        }
+    }, [selectedIndex, media]);
+
+    // Revoke blob URLs on unmount
+    useEffect(() => {
+        const blobCache = blobCacheRef.current;
+        return () => {
+            blobCache.forEach(url => URL.revokeObjectURL(url));
+            blobCache.clear();
+        };
+    }, []);
 
     // Apply transform after lightbox renders
     useEffect(() => {
@@ -463,6 +473,17 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
     }, [selectedIndex, media]);
 
     useEffect(() => {
+        const item = selectedIndex !== null ? media[selectedIndex] : null;
+        if (!item || !VIDEO_EXTS.includes(item.ext)) {
+            setSelectedVideoSrc('');
+            return;
+        }
+
+        const proxiedUrl = proxyUrl(item.url);
+        setSelectedVideoSrc(blobCacheRef.current.get(proxiedUrl) || proxiedUrl);
+    }, [selectedIndex, media]);
+
+    useEffect(() => {
         if (selectedIndex === null) return;
         const handler = (e: KeyboardEvent) => {
             switch (e.key) {
@@ -521,7 +542,7 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
         };
         window.addEventListener('keydown', handler);
         return () => window.removeEventListener('keydown', handler);
-    }, [selectedIndex, handleNext, handlePrev, toggleSlideshow, toggleFullscreen, closeLightbox, applyTransform, handleSave]);
+    }, [selectedIndex, handleNext, handlePrev, toggleSlideshow, toggleFullscreen, closeLightbox, applyTransform, handleSave, toggleThumbDocked]);
 
     const handleWheel = useCallback((e: React.WheelEvent) => {
         e.preventDefault(); e.stopPropagation();
@@ -609,7 +630,11 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
                 transformRef.current.style.transition = 'transform 0.1s ease-out';
             }
             if (!didDragRef.current && videoRef.current) {
-                videoRef.current.paused ? videoRef.current.play().catch(() => {}) : videoRef.current.pause();
+                if (videoRef.current.paused) {
+                    void videoRef.current.play().catch(() => {});
+                } else {
+                    videoRef.current.pause();
+                }
             }
         } else if (pointersRef.current.size === 1) {
             // Transitioned from pinch back to single-finger drag
@@ -634,7 +659,6 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
 
     const selectedItem = selectedIndex !== null ? media[selectedIndex] : null;
     const selectedProxyUrl = selectedItem ? proxyUrl(selectedItem.url) : '';
-    const selectedVideoSrc = selectedProxyUrl ? (blobCacheRef.current.get(selectedProxyUrl) || selectedProxyUrl) : '';
 
     const getSourceLink = (item: MediaItem) => {
         if (item.source === 'desuarchive') return `https://desuarchive.org/${item.boardId}/thread/${item.threadId}#${item.id}`;
@@ -767,7 +791,14 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
                                         >
                                             <button
                                                 className="text-white/70 hover:text-white transition-colors duration-100 bg-transparent border-none cursor-pointer p-0.5"
-                                                onClick={() => { if (videoRef.current) { isVideoPaused ? videoRef.current.play().catch(() => {}) : videoRef.current.pause(); } }}
+                                                onClick={() => {
+                                                    if (!videoRef.current) return;
+                                                    if (isVideoPaused) {
+                                                        void videoRef.current.play().catch(() => {});
+                                                    } else {
+                                                        videoRef.current.pause();
+                                                    }
+                                                }}
                                             >
                                                 {isVideoPaused ? <Play size={12} /> : <Pause size={12} />}
                                             </button>
