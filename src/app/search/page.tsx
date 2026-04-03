@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { ChevronUp, RefreshCw, Funnel } from 'lucide-react';
@@ -29,7 +30,7 @@ function SearchPageContent() {
 
     const didFetchRef = useRef('');
     const fetchedThreadsRef = useRef<ThreadMatch[]>([]);
-    const knownMediaIdsRef = useRef(new Set<number>());
+    const knownMediaIdsRef = useRef(new Set<string>());
     const [newItemIds, setNewItemIds] = useState<Set<number>>(new Set());
     const lastScrollYRef = useRef(0);
 
@@ -46,7 +47,7 @@ function SearchPageContent() {
             setIsLoading(true);
             setMedia([]);
             setNewItemIds(new Set());
-            knownMediaIdsRef.current = new Set();
+            knownMediaIdsRef.current = new Set<string>();
             fetchedThreadsRef.current = [];
             setThreadCount(0);
             setStatus('Searching...');
@@ -71,7 +72,7 @@ function SearchPageContent() {
                 const allMedia: MediaItem[] = [];
                 for (const items of results) allMedia.push(...items);
                 allMedia.sort((a, b) => a.tim - b.tim);
-                for (const m of allMedia) knownMediaIdsRef.current.add(m.id);
+                for (const m of allMedia) knownMediaIdsRef.current.add(`${m.boardKey}-${m.id}`);
 
                 setMedia(allMedia);
                 setStatus(allMedia.length
@@ -102,13 +103,13 @@ function SearchPageContent() {
 
             const allMedia: MediaItem[] = [];
             for (const items of results) allMedia.push(...items);
-            const newMedia = allMedia.filter(m => !knownMediaIdsRef.current.has(m.id));
+            const newMedia = allMedia.filter(m => !knownMediaIdsRef.current.has(`${m.boardKey}-${m.id}`));
 
             if (newMedia.length > 0) {
                 newMedia.sort((a, b) => a.tim - b.tim);
                 setMedia(prev => {
                     const combined = [...prev, ...newMedia];
-                    for (const m of combined) knownMediaIdsRef.current.add(m.id);
+                    for (const m of combined) knownMediaIdsRef.current.add(`${m.boardKey}-${m.id}`);
                     return combined;
                 });
                 setNewItemIds(new Set(newMedia.map(m => m.id)));
@@ -161,12 +162,12 @@ function SearchPageContent() {
             >
                 <div className="max-w-7xl mx-auto flex items-center gap-3">
                     {/* Logo + Mascot */}
-                    <a href="/" className="flex items-center gap-2 shrink-0 hover:opacity-80 transition-opacity">
+                    <Link href="/" className="flex items-center gap-2 shrink-0 hover:opacity-80 transition-opacity">
                         <img src="/3f6cbd855343dff141df45f6c254a463aba221.png" alt="" className="w-8 h-8" draggable={false} />
                         <span className="text-lg font-black tracking-tight bg-gradient-to-r from-[var(--accent)] via-purple-400 to-blue-400 bg-clip-text text-transparent">
                             4CHMG2
                         </span>
-                    </a>
+                    </Link>
 
                     {/* Search bar + board picker to the right */}
                     <SearchForm
