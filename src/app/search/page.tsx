@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
-import { ChevronUp, RefreshCw, Funnel } from 'lucide-react';
+import { Check, ChevronUp, RefreshCw, Funnel, SlidersHorizontal, X } from 'lucide-react';
 import { parseBoardKeys } from '@/lib/boards';
 import { searchThreads, getThreadMedia, type MediaItem, type ThreadMatch } from '@/lib/api';
 import SearchForm from '@/components/SearchForm';
@@ -27,12 +27,17 @@ function SearchPageContent() {
     const [headerVisible, setHeaderVisible] = useState(true);
     const [mediaFilter, setMediaFilter] = useState<'mixed' | 'images' | 'videos'>('mixed');
     const [filterOpen, setFilterOpen] = useState(false);
+    const [filenameFilter, setFilenameFilter] = useState('');
+    const [filenameRegex, setFilenameRegex] = useState(false);
+    const [filenameFilterOpen, setFilenameFilterOpen] = useState(false);
 
     const didFetchRef = useRef('');
     const fetchedThreadsRef = useRef<ThreadMatch[]>([]);
     const knownMediaIdsRef = useRef(new Set<string>());
     const [newItemIds, setNewItemIds] = useState<Set<number>>(new Set());
     const lastScrollYRef = useRef(0);
+    const filenameFilterRef = useRef<HTMLDivElement>(null);
+    const filenameInputRef = useRef<HTMLInputElement>(null);
 
     const boardKeys = parseBoardKeys(boardParam);
     const keywords = queryParam.split('|').filter(Boolean);
@@ -48,6 +53,9 @@ function SearchPageContent() {
             setMedia([]);
             setNewItemIds(new Set());
             knownMediaIdsRef.current = new Set<string>();
+            setFilenameFilter('');
+            setFilenameRegex(false);
+            setFilenameFilterOpen(false);
             fetchedThreadsRef.current = [];
             setThreadCount(0);
             setStatus('Searching...');
@@ -142,16 +150,55 @@ function SearchPageContent() {
         return () => window.removeEventListener('scroll', handleScroll);
     }, []);
 
+    useEffect(() => {
+        if (filenameFilterOpen) {
+            requestAnimationFrame(() => filenameInputRef.current?.focus());
+        }
+    }, [filenameFilterOpen]);
+
+    useEffect(() => {
+        if (!filenameFilterOpen) return;
+
+        const handlePointerDown = (event: MouseEvent) => {
+            if (!filenameFilterRef.current?.contains(event.target as Node)) {
+                setFilenameFilterOpen(false);
+            }
+        };
+
+        document.addEventListener('mousedown', handlePointerDown);
+        return () => document.removeEventListener('mousedown', handlePointerDown);
+    }, [filenameFilterOpen]);
+
     const VIDEO_EXTS = ['.webm', '.mp4'];
-    const filteredMedia = mediaFilter === 'mixed' ? media
+    const typeFiltered = mediaFilter === 'mixed' ? media
         : mediaFilter === 'images' ? media.filter(m => !VIDEO_EXTS.includes(m.ext))
         : media.filter(m => VIDEO_EXTS.includes(m.ext));
+    let filteredMedia = typeFiltered;
+    let regexValid = true;
+
+    if (filenameFilter) {
+        if (filenameRegex) {
+            try {
+                const re = new RegExp(filenameFilter, 'i');
+                filteredMedia = typeFiltered.filter(m => re.test(m.filename));
+            } catch {
+                regexValid = false;
+            }
+        } else {
+            const needle = filenameFilter.toLowerCase();
+            filteredMedia = typeFiltered.filter(m => m.filename.toLowerCase().includes(needle));
+        }
+    }
 
     const filterOptions = [
         { value: 'mixed' as const, label: 'Mixed' },
         { value: 'images' as const, label: 'Images' },
         { value: 'videos' as const, label: 'Videos' },
     ];
+
+    const displayStatus = filenameFilter && filteredMedia.length < typeFiltered.length
+        ? `${status} (showing ${filteredMedia.length} matching "${filenameFilter}")`
+        : status;
 
     return (
         <div className="min-h-screen bg-[var(--bg-base)]">
@@ -206,13 +253,66 @@ function SearchPageContent() {
                             </>
                         )}
                     </div>
+
+                    <div ref={filenameFilterRef} className="relative shrink-0">
+                        <button
+                            onClick={() => setFilenameFilterOpen(f => !f)}
+                            className={`flex h-[34px] w-[38px] items-center justify-center rounded-full text-sm border transition-all duration-150 cursor-pointer ${filenameFilter ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-dim)]' : 'border-[var(--border)] text-[var(--text-secondary)] bg-[var(--bg-surface)] hover:border-[var(--accent)] hover:text-[var(--accent)]'}`}
+                        >
+                            <SlidersHorizontal size={14} />
+                        </button>
+                        {filenameFilterOpen && (
+                            <div className="absolute right-0 top-full mt-1.5 z-50 bg-[var(--bg-elevated)] border border-[var(--border)] rounded-xl shadow-xl w-72 p-3">
+                                <div className="relative">
+                                    <input
+                                        ref={filenameInputRef}
+                                        type="text"
+                                        value={filenameFilter}
+                                        onChange={e => setFilenameFilter(e.target.value)}
+                                        onKeyDown={e => {
+                                            if (e.key === 'Escape') setFilenameFilterOpen(false);
+                                        }}
+                                        placeholder="Filter by filename..."
+                                        className={`w-full bg-[var(--bg-surface)] border rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] px-3 py-2 pr-8 focus:border-[var(--accent)] focus:outline-none transition-colors ${filenameRegex && !regexValid ? 'border-red-500/60' : 'border-[var(--border)]'}`}
+                                    />
+                                    {filenameFilter && (
+                                        <button
+                                            onClick={() => {
+                                                setFilenameFilter('');
+                                                filenameInputRef.current?.focus();
+                                            }}
+                                            className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
+                                        >
+                                            <X size={14} />
+                                        </button>
+                                    )}
+                                </div>
+                                <label className="flex items-center gap-2 mt-3 text-sm text-[var(--text-secondary)] cursor-pointer select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={filenameRegex}
+                                        onChange={e => setFilenameRegex(e.target.checked)}
+                                        className="peer sr-only"
+                                    />
+                                    <span className="flex h-4 w-4 items-center justify-center rounded border border-[color:color-mix(in_srgb,var(--border)_70%,white_18%)] bg-[color:color-mix(in_srgb,var(--bg-surface)_82%,white_18%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition-colors peer-checked:border-[var(--accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--accent)]">
+                                        <Check
+                                            size={12}
+                                            strokeWidth={3}
+                                            className={`text-[var(--accent)] transition-opacity ${filenameRegex ? 'opacity-100' : 'opacity-0'}`}
+                                        />
+                                    </span>
+                                    <span>Regex</span>
+                                </label>
+                            </div>
+                        )}
+                    </div>
                 </div>
             </header>
 
             {/* Results */}
             <main className="max-w-7xl mx-auto px-4 py-4">
                 {status && (
-                    <div className="text-center text-[var(--text-muted)] text-sm mb-3">{status}</div>
+                    <div className="text-center text-[var(--text-muted)] text-sm mb-3">{displayStatus}</div>
                 )}
 
                 {isLoading && media.length === 0 && (
