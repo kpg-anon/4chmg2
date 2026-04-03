@@ -39,8 +39,9 @@ export async function GET(request: NextRequest) {
             timeout: 15000,
         });
         return NextResponse.json(response.data);
-    } catch (error: any) {
-        console.error(`Error fetching thread ${key}/${id}:`, error.message || error);
+    } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(`Error fetching thread ${key}/${id}:`, msg);
         return new NextResponse(`Error fetching thread ${key}/${id}`, { status: 500 });
     }
 }

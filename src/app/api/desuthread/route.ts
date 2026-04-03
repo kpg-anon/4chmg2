@@ -30,8 +30,9 @@ export async function GET(request: NextRequest) {
         });
 
         return NextResponse.json(response.data);
-    } catch (error: any) {
-        console.error(`[Desuarchive Thread] Error fetching ${board}/${id}:`, error.message || error);
+    } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(`[Desuarchive Thread] Error fetching ${board}/${id}:`, msg);
         return new NextResponse(`Error fetching desuarchive thread ${board}/${id}`, { status: 500 });
     }
 }

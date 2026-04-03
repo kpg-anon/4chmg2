@@ -38,8 +38,9 @@ export async function GET(request: NextRequest) {
             timeout: 15000,
         });
         return NextResponse.json(response.data);
-    } catch (error: any) {
-        console.error(`Error fetching catalog for ${key}:`, error.message || error);
+    } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(`Error fetching catalog for ${key}:`, msg);
         return new NextResponse(`Error fetching catalog for ${key}`, { status: 500 });
     }
 }

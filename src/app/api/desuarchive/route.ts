@@ -78,8 +78,9 @@ export async function GET(request: NextRequest) {
         console.log(`[Desuarchive] Found ${unique.length} unique threads for /${board}/, returning ${limited.length}`);
 
         return NextResponse.json(limited);
-    } catch (error: any) {
-        console.error(`[Desuarchive] Error searching ${board}:`, error.message || error);
+    } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(`[Desuarchive] Error searching ${board}:`, msg);
         return new NextResponse(`Error searching desuarchive for ${board}`, { status: 500 });
     }
 }
