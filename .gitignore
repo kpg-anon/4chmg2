@@ -41,24 +41,3 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
-# local session memory
-/memory/
-
-# local reference files (code snippets, ingestion material)
-/reference/
-
-# local tools/scripts
-/tools/
-
-# logs
-/logs/
-
-# test data
-/json/
-
-# nginx (generated from example)
-/nginx/4chmg2.conf
-
-# docs/superpowers (development tooling)
-/docs/superpowers/
