@@ -119,13 +119,6 @@ const SOURCE_FAVICONS: Record<string, string> = {
     easychan: 'https://easychan.net/assets/favicons/favicon.ico',
 };
 
-// requestVideoFrameCallback is not yet in TypeScript's lib.dom.d.ts
-interface VideoWithRVFC extends HTMLVideoElement {
-    requestVideoFrameCallback(
-        callback: (now: DOMHighResTimeStamp, meta: { mediaTime: number }) => void
-    ): number;
-    cancelVideoFrameCallback(id: number): void;
-}
 
 export default function Gallery({ media, initialSelectedIndex, newItemIds }: GalleryProps) {
     const [selectedIndex, setSelectedIndex] = useState<number | null>(initialSelectedIndex ?? null);
@@ -216,16 +209,16 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
         if (!('requestVideoFrameCallback' in video)) return;
         lastFrameTimeRef.current = -1;
         let id: number;
-        const onFrame = (_now: DOMHighResTimeStamp, meta: { mediaTime: number }) => {
+        const onFrame = (_now: DOMHighResTimeStamp, meta: VideoFrameCallbackMetadata) => {
             if (lastFrameTimeRef.current >= 0) {
                 const delta = meta.mediaTime - lastFrameTimeRef.current;
                 if (delta > 0 && delta < 0.2) frameDurationRef.current = delta;
             }
             lastFrameTimeRef.current = meta.mediaTime;
-            id = (video as VideoWithRVFC).requestVideoFrameCallback(onFrame);
+            id = video.requestVideoFrameCallback(onFrame);
         };
-        id = (video as VideoWithRVFC).requestVideoFrameCallback(onFrame);
-        return () => (video as VideoWithRVFC).cancelVideoFrameCallback(id);
+        id = video.requestVideoFrameCallback(onFrame);
+        return () => video.cancelVideoFrameCallback(id);
     }, [selectedIndex, isVideoPaused]);
 
     useEffect(() => {
@@ -658,7 +651,6 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
     }, [isFullscreen, isPlaying, isEditingInterval]);
 
     const selectedItem = selectedIndex !== null ? media[selectedIndex] : null;
-    const selectedProxyUrl = selectedItem ? proxyUrl(selectedItem.url) : '';
 
     const getSourceLink = (item: MediaItem) => {
         if (item.source === 'desuarchive') return `https://desuarchive.org/${item.boardId}/thread/${item.threadId}#${item.id}`;
