@@ -18,7 +18,7 @@ export default function HomePage() {
             <div className="flex flex-col items-center px-6 pt-0">
                 {/* Mascot */}
                 <img
-                    src="/3f6cbd855343dff141df45f6c254a463aba221.png"
+                    src="/mascot.webp"
                     alt="4CHMG"
                     className="w-80 h-80 sm:w-96 sm:h-96 mb-1"
                     draggable={false}

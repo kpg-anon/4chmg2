@@ -210,7 +210,7 @@ function SearchPageContent() {
                 <div className="max-w-7xl mx-auto flex items-center gap-3">
                     {/* Logo + Mascot */}
                     <Link href="/" className="flex items-center gap-2 shrink-0 hover:opacity-80 transition-opacity">
-                        <img src="/3f6cbd855343dff141df45f6c254a463aba221.png" alt="" className="w-8 h-8" draggable={false} />
+                        <img src="/mascot.webp" alt="" className="w-8 h-8" draggable={false} />
                         <span className="text-lg font-black tracking-tight bg-gradient-to-r from-[var(--accent)] via-purple-400 to-blue-400 bg-clip-text text-transparent">
                             4CHMG2
                         </span>
