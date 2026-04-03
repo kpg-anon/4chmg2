@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 
@@ -15,9 +16,9 @@ function MediaPageContent() {
                 <p className="text-[var(--text-muted)]">
                     Direct media view — Board: {board}, Thread: {thread}, Post: {post}
                 </p>
-                <a href="/" className="text-[var(--accent)] hover:underline mt-4 inline-block">
+                <Link href="/" className="text-[var(--accent)] hover:underline mt-4 inline-block">
                     Go to search
-                </a>
+                </Link>
             </div>
         </main>
     );
