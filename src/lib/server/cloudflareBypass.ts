@@ -2,11 +2,26 @@ import axios from 'axios';
 import * as http from 'http';
 import * as https from 'https';
 
-const FLARESOLVERR_URL = process.env.FLARESOLVERR_URL || 'http://127.0.0.1:21674/v1';
+const FLARESOLVERR_URL = process.env.FLARESOLVERR_URL || 'http://127.0.0.1:8191/v1';
 
 // Per-domain cookie storage so easychan and mokachan don't bleed into each other
 const cookieStore = new Map<string, string[]>();
 let cachedUserAgent = '';
+
+interface FlareSolverrCookie {
+    name: string;
+    value: string;
+}
+
+interface FlareSolverrResponse {
+    status: string;
+    message?: string;
+    solution: {
+        cookies?: FlareSolverrCookie[];
+        userAgent?: string;
+        response: string;
+    };
+}
 
 function getDomainFromUrl(url: string): string {
     try {
@@ -57,8 +72,21 @@ export async function fetchImage(url: string): Promise<Buffer> {
     return fetchDirect(url, userAgent, referer, cookieHeader);
 }
 
-function fetchDirect(url: string, userAgent: string, referer: string, cookieHeader: string): Promise<Buffer> {
+const MAX_REDIRECTS = 5;
+
+function fetchDirect(
+    url: string,
+    userAgent: string,
+    referer: string,
+    cookieHeader: string,
+    depth: number = 0,
+): Promise<Buffer> {
     return new Promise((resolve, reject) => {
+        if (depth >= MAX_REDIRECTS) {
+            reject(new Error(`Too many redirects fetching ${url}`));
+            return;
+        }
+
         const isHttps = url.startsWith('https://');
         const headers: Record<string, string> = {
             'User-Agent': userAgent,
@@ -77,14 +105,24 @@ function fetchDirect(url: string, userAgent: string, referer: string, cookieHead
         }, (res) => {
             // Follow redirects
             if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                fetchDirect(res.headers.location, userAgent, referer, cookieHeader)
+                let location = res.headers.location;
+                // Resolve relative redirect URLs against the current URL
+                if (!location.startsWith('http://') && !location.startsWith('https://')) {
+                    try {
+                        location = new URL(location, url).href;
+                    } catch {
+                        reject(new Error(`Invalid redirect location: ${location}`));
+                        return;
+                    }
+                }
+                fetchDirect(location, userAgent, referer, cookieHeader, depth + 1)
                     .then(resolve)
                     .catch(reject);
                 return;
             }
 
             const chunks: Buffer[] = [];
-            res.on('data', (chunk) => chunks.push(chunk));
+            res.on('data', (chunk: Buffer) => chunks.push(chunk));
             res.on('end', () => {
                 if (res.statusCode && res.statusCode >= 400) {
                     reject(new Error(`HTTP ${res.statusCode} for ${url}`));
@@ -112,18 +150,18 @@ export async function keepTunnelAlive(): Promise<void> {
 
 /**
  * Fetch a URL via FlareSolverr (for Cloudflare-protected pages).
- * FlareSolverr runs locally at http://127.0.0.1:21674/v1.
+ * FlareSolverr runs locally at http://127.0.0.1:8191/v1.
  * Returns parsed JSON.
  */
-export async function fetchWithFlareSolverr(url: string): Promise<any> {
+export async function fetchWithFlareSolverr(url: string): Promise<unknown> {
     console.log(`[FlareSolverr] Fetching: ${url}`);
     const domain = getDomainFromUrl(url);
 
-    let lastError: any;
+    let lastError: unknown;
     for (let attempt = 1; attempt <= 3; attempt++) {
         try {
             console.log(`[FlareSolverr] Attempt ${attempt}/3...`);
-            const response = await axios.post(
+            const response = await axios.post<FlareSolverrResponse>(
                 FLARESOLVERR_URL,
                 {
                     cmd: 'request.get',
@@ -143,7 +181,7 @@ export async function fetchWithFlareSolverr(url: string): Promise<any> {
             // Cache cookies per domain
             const cookies = response.data.solution.cookies || [];
             if (cookies.length > 0) {
-                const cookieStrings = cookies.map((c: any) => `${c.name}=${c.value}`);
+                const cookieStrings = cookies.map((cookie) => `${cookie.name}=${cookie.value}`);
                 setCookiesForDomain(domain, cookieStrings);
             }
 
@@ -170,22 +208,23 @@ export async function fetchWithFlareSolverr(url: string): Promise<any> {
                 console.error('[FlareSolverr] Failed to parse JSON. Preview:', jsonContent.substring(0, 200));
                 throw new Error('Response was not valid JSON');
             }
-        } catch (error: any) {
-            console.error(`[FlareSolverr] Attempt ${attempt} failed:`, error.message || error);
+        } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : String(error);
+            console.error(`[FlareSolverr] Attempt ${attempt} failed:`, msg);
             lastError = error;
             if (attempt < 3) {
                 await new Promise(resolve => setTimeout(resolve, 2000));
             }
         }
     }
-    throw lastError;
+    throw (lastError instanceof Error ? lastError : new Error(String(lastError)));
 }
 
 /**
  * Fetch JSON from a meguca-style board API directly (no Cloudflare bypass).
  * Used for mokachan and any future meguca sites without Cloudflare challenges.
  */
-export async function fetchMegucaJson(url: string): Promise<any> {
+export async function fetchMegucaJson(url: string): Promise<unknown> {
     console.log(`[Meguca] Fetching directly: ${url}`);
     const domain = getDomainFromUrl(url);
 
