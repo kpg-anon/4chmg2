@@ -18,6 +18,13 @@ const eslintConfig = defineConfig([
       "react-hooks/set-state-in-effect": "warn",
     },
   },
+  // CJS config files must use require() — disable the TS import rule for them.
+  {
+    files: ["gulpfile.js", "ecosystem.config.js", "load-env.js"],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;
