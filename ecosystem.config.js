@@ -1,4 +1,6 @@
-require('dotenv').config();
+const { loadEnv } = require('./load-env');
+
+loadEnv(__dirname);
 
 module.exports = {
   apps: [{

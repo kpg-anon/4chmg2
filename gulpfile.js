@@ -1,8 +1,9 @@
 const { exec } = require('child_process');
 const path = require('path');
 
-// Load .env for RAYON_NUM_THREADS and other build-time vars
-require('dotenv').config();
+// Load env for RAYON_NUM_THREADS and other build-time vars
+const { loadEnv } = require('./load-env');
+loadEnv(__dirname);
 
 function run(cmd) {
   return new Promise((resolve, reject) => {
