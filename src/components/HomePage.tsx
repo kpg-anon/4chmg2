@@ -19,7 +19,12 @@ export default function HomePage() {
                 {/* Mascot */}
                 <img
                     src="/mascot.webp"
-                    alt="4CHMG"
+                    alt=""
+                    aria-hidden="true"
+                    width={1397}
+                    height={1393}
+                    fetchPriority="high"
+                    loading="eager"
                     className="w-80 h-80 sm:w-96 sm:h-96 mb-1"
                     draggable={false}
                 />
