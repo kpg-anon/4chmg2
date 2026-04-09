@@ -298,6 +298,10 @@ cp "$APP_DIR/nginx/4chmg2.conf.example" "$NGINX_CONF"
 sed -i "s/DOMAIN_PLACEHOLDER/$DOMAIN/g" "$NGINX_CONF"
 sed -i "s/PORT_PLACEHOLDER/$PORT/g" "$NGINX_CONF"
 
+# Create nginx proxy cache directory
+mkdir -p /var/cache/nginx/4chmg2
+chown www-data:www-data /var/cache/nginx/4chmg2
+
 # Ensure sites-enabled directory exists
 mkdir -p /etc/nginx/sites-enabled
 
