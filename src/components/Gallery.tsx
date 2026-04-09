@@ -22,7 +22,6 @@ interface GalleryProps {
 const VIDEO_EXTS = ['.webm', '.mp4'];
 const proxyUrl = (url: string) => `/api/proxy?url=${encodeURIComponent(url)}`;
 
-const THUMB_WINDOW = 60;
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 2000;
 
@@ -238,9 +237,7 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
 
     useEffect(() => {
         if (selectedIndex !== null && thumbnailStripRef.current) {
-            const windowStart = Math.max(0, selectedIndex - THUMB_WINDOW / 2);
-            const localIdx = selectedIndex - windowStart;
-            const activeThumb = thumbnailStripRef.current.children[localIdx] as HTMLElement | undefined;
+            const activeThumb = thumbnailStripRef.current.children[selectedIndex] as HTMLElement | undefined;
             if (activeThumb) activeThumb.scrollIntoView({ behavior: 'smooth', inline: 'center' });
         }
     }, [selectedIndex]);
@@ -335,10 +332,12 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
             precacheRef.current.add(url);
             const isVideo = VIDEO_EXTS.includes(item.ext);
             if (isVideo) {
-                fetch(url)
-                    .then(res => res.blob())
-                    .then(blob => { blobCacheRef.current.set(url, URL.createObjectURL(blob)); })
-                    .catch(() => {});
+                if (item.size > 0 && item.size < 4 * 1024 * 1024) {
+                    fetch(url, { priority: 'low' } as RequestInit)
+                        .then(res => res.blob())
+                        .then(blob => { blobCacheRef.current.set(url, URL.createObjectURL(blob)); })
+                        .catch(() => {});
+                }
             } else {
                 const img = new Image();
                 img.src = url;
@@ -666,9 +665,6 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
         pointerEvents: overlayVisible ? 'auto' : 'none',
     };
 
-    const thumbWindowStart = selectedIndex !== null ? Math.max(0, selectedIndex - THUMB_WINDOW / 2) : 0;
-    const thumbWindowEnd = selectedIndex !== null ? Math.min(media.length, selectedIndex + THUMB_WINDOW / 2) : 0;
-    const thumbSlice = selectedIndex !== null ? media.slice(thumbWindowStart, thumbWindowEnd) : [];
 
     return (
         <>
@@ -821,7 +817,7 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
                                 </div>
                             ) : (
                                 <div ref={mediaRotateRef} style={{ transition: 'transform 0.15s ease-out' }}>
-                                    <img ref={imgRef} src={proxyUrl(selectedItem.url)} alt={selectedItem.filename} className={`max-w-[90vw] max-h-[95vh] rounded shadow-2xl object-contain transition-opacity duration-200 ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`} draggable={false}
+                                    <img ref={imgRef} src={proxyUrl(selectedItem.url)} alt={selectedItem.filename} fetchPriority="high" className={`max-w-[90vw] max-h-[95vh] rounded shadow-2xl object-contain transition-opacity duration-200 ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`} draggable={false}
                                         onLoad={e => { const img = e.target as HTMLImageElement; setDimensions({ width: img.naturalWidth, height: img.naturalHeight }); setMediaLoaded(true); }}
                                     />
                                 </div>
@@ -893,16 +889,13 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
                         onClick={e => e.stopPropagation()}
                     >
                         <div ref={thumbnailStripRef} className="h-20 bg-black flex items-center gap-1.5 px-3 overflow-x-auto" style={overlayFadeStyle}>
-                            {thumbSlice.map((item, localIdx) => {
-                                const realIdx = thumbWindowStart + localIdx;
-                                return (
-                                    <button key={`thumb-${realIdx}`} onClick={() => { setSelectedIndex(realIdx); setIsPlaying(false); resetTransform(); }}
-                                        className={`relative h-16 w-16 shrink-0 rounded overflow-hidden border-2 transition-all duration-100 cursor-pointer ${realIdx === selectedIndex ? 'border-[var(--accent)] opacity-100' : 'border-transparent opacity-40 hover:opacity-80'}`}
+                            {media.map((item, index) => (
+                                    <button key={`thumb-${index}`} onClick={() => { setSelectedIndex(index); setIsPlaying(false); resetTransform(); }}
+                                        className={`relative h-16 w-16 shrink-0 rounded overflow-hidden border-2 transition-all duration-100 cursor-pointer ${index === selectedIndex ? 'border-[var(--accent)] opacity-100' : 'border-transparent opacity-40 hover:opacity-80'}`}
                                     >
-                                        <img src={proxyUrl(item.thumbnail)} alt="" className="object-cover w-full h-full" loading="lazy" />
+                                        <LazyThumb src={proxyUrl(item.thumbnail)} alt="" className="object-cover w-full h-full" />
                                     </button>
-                                );
-                            })}
+                                ))}
                         </div>
                     </div>
                 </div>,

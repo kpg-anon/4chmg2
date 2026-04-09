@@ -26,6 +26,8 @@ upstream 4chmg2_backend {
     keepalive 32;
 }
 
+proxy_cache_path /var/cache/nginx/4chmg2 levels=1:2 keys_zone=media_cache:10m max_size=5g inactive=30d use_temp_path=off;
+
 # HTTP server — certbot will add HTTPS and redirect automatically
 server {
     listen 80;
@@ -46,6 +48,36 @@ server {
 
     # Max upload size (for any future features)
     client_max_body_size 20m;
+
+    # Media proxy — cached at nginx level
+    location /api/proxy {
+        proxy_pass http://4chmg2_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Cache config
+        proxy_cache media_cache;
+        proxy_cache_valid 200 206 30d;
+        proxy_cache_use_stale error timeout updating http_500 http_502 http_503;
+        proxy_cache_lock on;
+        proxy_cache_lock_timeout 10s;
+        proxy_cache_key $scheme$request_method$host$request_uri;
+
+        # Debug header
+        add_header X-Cache-Status $upstream_cache_status;
+
+        # Larger buffers for media
+        proxy_buffer_size 32k;
+        proxy_buffers 16 64k;
+        proxy_busy_buffers_size 128k;
+
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
+    }
 
     # Proxy to Next.js
     location / {

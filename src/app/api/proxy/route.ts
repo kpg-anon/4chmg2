@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { fetchImage, keepTunnelAlive } from '@/lib/server/cloudflareBypass';
+import { fetchImage } from '@/lib/server/cloudflareBypass';
+import { getCachedMedia, cacheMedia } from '@/lib/server/mediaCache';
 
 const CONTENT_TYPES: Record<string, string> = {
     '.webm': 'video/webm',
@@ -11,8 +12,6 @@ const CONTENT_TYPES: Record<string, string> = {
     '.jpeg': 'image/jpeg',
 };
 
-// Only proxy media from known board domains.
-// Add a hostname here when a new board source is added to src/lib/boards.ts.
 const ALLOWED_HOSTNAMES = new Set([
     'i.4cdn.org',
     'is2.4chan.org',
@@ -24,7 +23,6 @@ const ALLOWED_HOSTNAMES = new Set([
 function isAllowedUrl(url: string): boolean {
     try {
         const { hostname } = new URL(url);
-        // Allow exact match or subdomain (e.g. assets.easychan.net)
         return ALLOWED_HOSTNAMES.has(hostname) ||
             [...ALLOWED_HOSTNAMES].some(h => hostname.endsWith(`.${h}`));
     } catch {
@@ -39,6 +37,21 @@ function getContentType(url: string): string {
     }
     return 'application/octet-stream';
 }
+
+function parseRange(rangeHeader: string, totalSize: number): { start: number; end: number } | null {
+    const match = rangeHeader.match(/bytes=(\d+)-(\d*)/);
+    if (!match) return null;
+    const start = parseInt(match[1], 10);
+    const end = match[2] ? parseInt(match[2], 10) : totalSize - 1;
+    if (start >= totalSize || end >= totalSize || start > end) return null;
+    return { start, end };
+}
+
+const CACHE_HEADERS = {
+    'Cache-Control': 'public, max-age=31536000, immutable',
+    'Access-Control-Allow-Origin': '*',
+    'Accept-Ranges': 'bytes',
+};
 
 export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
@@ -59,18 +72,73 @@ export async function GET(request: NextRequest) {
         return new NextResponse('URL not allowed', { status: 403 });
     }
 
-    try {
-        await keepTunnelAlive();
+    const contentType = getContentType(url);
+    const rangeHeader = request.headers.get('Range');
 
+    // ── Try disk cache first ──
+    if (rangeHeader) {
+        // Range request — try to serve from cached file via streaming
+        const cached = await getCachedMedia(url);
+        if (cached) {
+            const range = parseRange(rangeHeader, cached.size);
+            if (range) {
+                const slice = cached.buffer.subarray(range.start, range.end + 1);
+                return new NextResponse(new Uint8Array(slice), {
+                    status: 206,
+                    headers: {
+                        ...CACHE_HEADERS,
+                        'Content-Type': contentType,
+                        'Content-Length': String(slice.length),
+                        'Content-Range': `bytes ${range.start}-${range.end}/${cached.size}`,
+                    },
+                });
+            }
+        }
+    } else {
+        // Full request — serve from cache if available
+        const cached = await getCachedMedia(url);
+        if (cached) {
+            return new NextResponse(new Uint8Array(cached.buffer), {
+                status: 200,
+                headers: {
+                    ...CACHE_HEADERS,
+                    'Content-Type': contentType,
+                    'Content-Length': String(cached.size),
+                },
+            });
+        }
+    }
+
+    // ── Cache miss — fetch from origin ──
+    try {
         const imageBuffer = await fetchImage(url);
-        const contentType = getContentType(url);
+
+        // Save to disk cache (fire-and-forget)
+        cacheMedia(url, imageBuffer).catch(() => {});
+
+        // Handle range request on freshly fetched buffer
+        if (rangeHeader) {
+            const range = parseRange(rangeHeader, imageBuffer.length);
+            if (range) {
+                const slice = imageBuffer.subarray(range.start, range.end + 1);
+                return new NextResponse(new Uint8Array(slice), {
+                    status: 206,
+                    headers: {
+                        ...CACHE_HEADERS,
+                        'Content-Type': contentType,
+                        'Content-Length': String(slice.length),
+                        'Content-Range': `bytes ${range.start}-${range.end}/${imageBuffer.length}`,
+                    },
+                });
+            }
+        }
 
         return new NextResponse(new Uint8Array(imageBuffer), {
             status: 200,
             headers: {
+                ...CACHE_HEADERS,
                 'Content-Type': contentType,
-                'Cache-Control': 'public, max-age=31536000, immutable',
-                'Access-Control-Allow-Origin': '*',
+                'Content-Length': String(imageBuffer.length),
             },
         });
     } catch (error: unknown) {

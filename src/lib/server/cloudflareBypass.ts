@@ -2,6 +2,20 @@ import axios from 'axios';
 import * as http from 'http';
 import * as https from 'https';
 
+const httpAgent = new http.Agent({
+    keepAlive: true,
+    maxSockets: 16,
+    maxFreeSockets: 8,
+    timeout: 30000,
+});
+
+const httpsAgent = new https.Agent({
+    keepAlive: true,
+    maxSockets: 16,
+    maxFreeSockets: 8,
+    timeout: 30000,
+});
+
 const FLARESOLVERR_URL = process.env.FLARESOLVERR_URL || 'http://127.0.0.1:8191/v1';
 
 // Per-domain cookie storage so easychan and mokachan don't bleed into each other
@@ -102,6 +116,7 @@ function fetchDirect(
         const req = (isHttps ? https : http).request(url, {
             method: 'GET',
             headers,
+            agent: isHttps ? httpsAgent : httpAgent,
         }, (res) => {
             // Follow redirects
             if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
@@ -138,14 +153,6 @@ function fetchDirect(
         });
         req.end();
     });
-}
-
-/**
- * No-op kept for backward compatibility with proxy route.
- * SSH tunnels have been removed since FlareSolverr runs on localhost.
- */
-export async function keepTunnelAlive(): Promise<void> {
-    // No-op: FlareSolverr is on localhost, no tunnel needed
 }
 
 /**
@@ -234,6 +241,6 @@ export async function fetchMegucaJson(url: string): Promise<unknown> {
         'Referer': `https://${domain}/`,
     };
 
-    const response = await axios.get(url, { headers, timeout: 30000 });
+    const response = await axios.get(url, { headers, timeout: 30000, httpsAgent });
     return response.data;
 }
