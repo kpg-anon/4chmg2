@@ -25,7 +25,7 @@ Search by keyword across multiple imageboards simultaneously and browse all matc
 
 ## ✨ Features
 
-- [x] **Multi-board search** — Query 4chan, easychan, mokachan, and desuarchive at once
+- [x] **Multi-board search** — Query 4chan, 2ch.hk, easychan, mokachan, and desuarchive at once
 - [x] **Unified gallery grid** — All results merged and sorted by timestamp
 - [x] **Full-featured lightbox** — Keyboard navigation, zoom/pan, slideshow, flip, download
 - [x] **Cloudflare bypass** — FlareSolverr integration for protected boards
@@ -46,6 +46,7 @@ Search by keyword across multiple imageboards simultaneously and browse all matc
 | Source | Board | Cloudflare | Format |
 |:------:|:-----:|:----------:|:------:|
 | 4chan | /mu/, /trash/, /gif/ | No | 4chan API |
+| 2ch.hk | /kpop/ | No | Dvach API |
 | Easychan | /kr/ | Yes | Meguca |
 | Mokachan | /kr/ | No | Meguca |
 | Desuarchive | /mu/, /trash/ | No | Foolfuuka |
