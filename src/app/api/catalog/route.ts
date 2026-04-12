@@ -30,6 +30,17 @@ export async function GET(request: NextRequest) {
             }
         }
 
+        // 2ch.org (Dvach)
+        if (config.source === 'dvach') {
+            const response = await axios.get(`${config.baseUrl}/${config.id}/catalog.json`, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                },
+                timeout: 15000,
+            });
+            return NextResponse.json(response.data);
+        }
+
         // 4chan
         const response = await axios.get(`${config.baseUrl}/${config.id}/catalog.json`, {
             headers: {

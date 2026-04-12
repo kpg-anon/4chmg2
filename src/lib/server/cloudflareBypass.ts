@@ -81,6 +81,7 @@ export async function fetchImage(url: string): Promise<Buffer> {
     let referer = 'https://boards.4chan.org/';
     if (url.includes('easychan.net')) referer = 'https://easychan.net/';
     else if (url.includes('mokachan.cafe')) referer = 'https://mokachan.cafe/';
+    else if (url.includes('2ch.org')) referer = 'https://2ch.org/';
 
     console.log(`[Image Proxy] Fetching: ${url}${cookieHeader ? ' (with cookies)' : ''}`);
     return fetchDirect(url, userAgent, referer, cookieHeader);

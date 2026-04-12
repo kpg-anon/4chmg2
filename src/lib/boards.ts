@@ -1,4 +1,4 @@
-export type BoardSource = '4chan' | 'easychan' | 'mokachan' | 'desuarchive';
+export type BoardSource = '4chan' | 'easychan' | 'mokachan' | 'desuarchive' | 'dvach';
 
 export interface BoardConfig {
     /** Unique key: "source:id" e.g. "easychan:kr" */
@@ -65,6 +65,15 @@ export const BOARDS: BoardConfig[] = [
         imageDomain: 'mokachan.cafe',
         needsCloudflareBypass: false, isMeguca: true, threadCountApplies: true,
         searchField: 'both',
+    },
+    // 2ch.org (Dvach) boards
+    {
+        key: 'dvach:kpop', id: 'kpop', source: 'dvach',
+        label: 'K-pop', siteLabel: '2ch',
+        baseUrl: 'https://2ch.org',
+        imageDomain: '2ch.org',
+        needsCloudflareBypass: false, isMeguca: false, threadCountApplies: true,
+        searchField: 'subject',
     },
     // Desuarchive boards — foolfuuka archive of 4chan
     // searchField varies: mu has term in subject, trash has term in comment
@@ -135,4 +144,9 @@ export function getMegucaBoards(): BoardConfig[] {
 /** Get the desuarchive boards */
 export function getDesuarchiveBoards(): BoardConfig[] {
     return BOARDS.filter(b => b.source === 'desuarchive');
+}
+
+/** Get the dvach boards */
+export function getDvachBoards(): BoardConfig[] {
+    return BOARDS.filter(b => b.source === 'dvach');
 }

@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { Search, Loader2, Check } from 'lucide-react';
-import { hasThreadCountBoards, getFourchanBoards, getMegucaBoards, getDesuarchiveBoards, type BoardConfig } from '@/lib/boards';
+import { hasThreadCountBoards, getFourchanBoards, getMegucaBoards, getDvachBoards, getDesuarchiveBoards, type BoardConfig } from '@/lib/boards';
 
 interface SearchFormProps {
     isLoading?: boolean;
@@ -92,6 +92,7 @@ export default function SearchForm({
 
     const fourchanBoards = getFourchanBoards();
     const megucaBoards = getMegucaBoards();
+    const dvachBoards = getDvachBoards();
 
     // ── Board picker row (shared between full and compact+showBoardPicker modes) ──
     const boardPickerContent = (
@@ -100,6 +101,9 @@ export default function SearchForm({
                 <BoardBtn key={b.key} board={b} selected={selectedKeys.includes(b.key)} onClick={() => toggleBoard(b.key)} />
             ))}
             {megucaBoards.map(b => (
+                <BoardBtn key={b.key} board={b} selected={selectedKeys.includes(b.key)} onClick={() => toggleBoard(b.key)} showSiteLabel />
+            ))}
+            {dvachBoards.map(b => (
                 <BoardBtn key={b.key} board={b} selected={selectedKeys.includes(b.key)} onClick={() => toggleBoard(b.key)} showSiteLabel />
             ))}
             <div className="flex-1" />

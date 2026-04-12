@@ -18,6 +18,7 @@ const ALLOWED_HOSTNAMES = new Set([
     'easychan.net',
     'mokachan.cafe',
     'desuarchive.org',
+    '2ch.org',
 ]);
 
 function isAllowedUrl(url: string): boolean {

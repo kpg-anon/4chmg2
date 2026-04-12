@@ -116,6 +116,7 @@ const SOURCE_FAVICONS: Record<string, string> = {
     desuarchive: 'https://desuarchive.org/favicon.ico',
     mokachan: 'https://mokachan.cafe/assets/favicons/favicon.ico',
     easychan: 'https://easychan.net/assets/favicons/favicon.ico',
+    dvach: 'https://2ch.org/favicon.ico',
 };
 
 
@@ -656,6 +657,10 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
         if (item.source === '4chan') return `https://boards.4chan.org/${item.boardId}/thread/${item.threadId}#p${item.id}`;
         if (item.source === 'easychan') return `https://easychan.net/${item.boardId}/${item.threadId}#p${item.id}`;
         if (item.source === 'mokachan') return `https://mokachan.cafe/${item.boardId}/${item.threadId}#p${item.id}`;
+        if (item.source === 'dvach') {
+            const postNum = item.id > 100000000 ? Math.floor(item.id / 100) : item.id;
+            return `https://2ch.org/${item.boardId}/res/${item.threadId}.html#${postNum}`;
+        }
         return '#';
     };
 

@@ -124,6 +124,42 @@ interface MegucaThreadResponse extends MegucaPost {
     posts?: MegucaPost[];
 }
 
+// 2ch.org (Dvach) types
+interface DvachCatalogThread {
+    num: number;
+    subject?: string;
+    comment?: string;
+    timestamp?: number;
+    posts_count?: number;
+    lasthit?: number;
+}
+
+interface DvachCatalogResponse {
+    threads?: DvachCatalogThread[];
+}
+
+interface DvachFile {
+    name: string;
+    fullname?: string;
+    displayname?: string;
+    path: string;
+    thumbnail: string;
+    size: number;
+    type: number;
+}
+
+interface DvachPost {
+    num: number;
+    timestamp?: number;
+    subject?: string;
+    comment?: string;
+    files?: DvachFile[];
+}
+
+interface DvachThreadResponse {
+    threads?: Array<{ posts?: DvachPost[] }>;
+}
+
 // Meguca file_type mapping
 const MEGUCA_FILE_TYPE_EXT: Record<number, string> = {
     0: '.jpg',
@@ -205,6 +241,45 @@ export async function searchThreads(
         const catalog = await fetchCatalog(boardKey);
         if (!catalog) {
             console.log(`[Search] No catalog data for ${boardKey}`);
+            continue;
+        }
+
+        // 2ch.org (Dvach) — flat threads array with keyword filtering
+        if (config.source === 'dvach') {
+            const catalogData = catalog as DvachCatalogResponse;
+            const threads = catalogData.threads || [];
+            const matches: ThreadMatch[] = [];
+
+            for (const thread of threads) {
+                const subject = (thread.subject || '').toLowerCase();
+                const comment = (thread.comment || '').toLowerCase();
+
+                const hasMatch = keywords.some(k => {
+                    const lower = k.toLowerCase();
+                    if (config.searchField === 'subject') return subject.includes(lower);
+                    if (config.searchField === 'comment') return comment.includes(lower);
+                    return subject.includes(lower) || comment.includes(lower);
+                });
+
+                if (hasMatch) {
+                    matches.push({
+                        boardKey,
+                        threadId: thread.num,
+                        subject: thread.subject,
+                        comment: thread.comment,
+                        lastModified: thread.lasthit || thread.timestamp,
+                        replies: thread.posts_count,
+                    });
+                }
+            }
+
+            // Respect thread count limit (most recent first by lasthit)
+            const limited = config.threadCountApplies
+                ? matches.slice(0, megucaThreadCount)
+                : matches;
+            allMatches.push(...limited);
+
+            console.log(`[Search] 2ch /${config.id}/: ${matches.length} matching, using ${limited.length}`);
             continue;
         }
 
@@ -334,9 +409,14 @@ export async function getThreadMedia(boardKey: string, threadId: number): Promis
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         data = await response.json();
 
-        const media = config.isMeguca
-            ? extractMegucaMedia(data, boardKey, config.source, config.id, threadId, config.baseUrl)
-            : extractFourchanMedia(data, boardKey, config.id, threadId);
+        let media: MediaItem[];
+        if (config.source === 'dvach') {
+            media = extractDvachMedia(data, boardKey, config.id, threadId, config.baseUrl);
+        } else if (config.isMeguca) {
+            media = extractMegucaMedia(data, boardKey, config.source, config.id, threadId, config.baseUrl);
+        } else {
+            media = extractFourchanMedia(data, boardKey, config.id, threadId);
+        }
 
         setCache(cacheKey, media);
         return media;
@@ -471,6 +551,52 @@ function extractMegucaMedia(
             tim: (post.time || 0) * 1000,
             size: image.size || 0,
         });
+    }
+
+    return media;
+}
+
+function extractDvachMedia(
+    data: unknown,
+    boardKey: string,
+    boardId: string,
+    threadId: number,
+    baseUrl: string,
+): MediaItem[] {
+    const media: MediaItem[] = [];
+    if (!data || typeof data !== 'object') return media;
+
+    const response = data as DvachThreadResponse;
+    const threadData = response.threads?.[0];
+    if (!threadData?.posts) return media;
+
+    for (const post of threadData.posts) {
+        if (!post.files || post.files.length === 0) continue;
+
+        for (let fi = 0; fi < post.files.length; fi++) {
+            const file = post.files[fi];
+            if (!file.path) continue;
+
+            const extMatch = file.name.match(/\.\w+$/);
+            const ext = extMatch ? extMatch[0] : '.jpg';
+
+            // Use post.num * 100 + fileIndex for unique id (posts can have multiple files)
+            const id = post.files.length > 1 ? post.num * 100 + fi : post.num;
+
+            media.push({
+                id,
+                boardKey,
+                source: 'dvach',
+                boardId,
+                threadId,
+                url: `${baseUrl}${file.path}`,
+                thumbnail: `${baseUrl}${file.thumbnail}`,
+                filename: (file.fullname || file.displayname || file.name).replace(/\.\w+$/, ''),
+                ext,
+                tim: (post.timestamp || 0) * 1000,
+                size: (file.size || 0) * 1024, // 2ch.org size is in KB
+            });
+        }
     }
 
     return media;
