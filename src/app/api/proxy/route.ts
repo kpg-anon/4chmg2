@@ -18,6 +18,7 @@ const ALLOWED_HOSTNAMES = new Set([
     'easychan.net',
     'mokachan.cafe',
     'desuarchive.org',
+    'desu-usergeneratedcontent.xyz',
     '2ch.org',
 ]);
 
