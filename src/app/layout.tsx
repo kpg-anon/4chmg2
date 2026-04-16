@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
     title: "4CHMG2",
-    description: "@kpganon",
+    description: "A multi-imageboard media aggregator tailored to kpop enjoyers",
 };
 
 export default function RootLayout({
