@@ -1,6 +1,11 @@
 # Changelog
 
 ## 2026-05-24
+### Enter key always submits search (v1.1.1)
+- After clicking a board toggle the button kept keyboard focus, so pressing Enter re-activated it and untoggled the board instead of submitting
+- Intercept Enter on `BoardBtn` and route it to `form.requestSubmit()` so the keyboard flow is "click board → type query → Enter"
+- Space still toggles boards via the browser default
+
 ### Aggressive thumbnail prefetch (v1.1.0)
 - Bump `IntersectionObserver` `rootMargin` on grid thumbnails `200px` → `1500px` so the browser starts fetching well ahead of scroll
 - Bump outbound HTTP keep-alive pool `maxSockets` 16 → 64, `maxFreeSockets` 8 → 16 to avoid socket queueing during burst scroll + parallel cache warmup

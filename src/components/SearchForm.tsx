@@ -191,9 +191,19 @@ export default function SearchForm({
 }
 
 function BoardBtn({ board, selected, onClick, showSiteLabel = false }: { board: BoardConfig; selected: boolean; onClick: () => void; showSiteLabel?: boolean }) {
+    // After clicking a board the button keeps focus; default Enter behavior
+    // would re-activate it and untoggle. Override Enter to submit the form
+    // instead so the keyboard flow is "click board → type query → Enter".
+    // Space still toggles via the browser default.
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            e.currentTarget.form?.requestSubmit();
+        }
+    };
     return (
         <button
-            type="button" onClick={onClick}
+            type="button" onClick={onClick} onKeyDown={handleKeyDown}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-all duration-150 border cursor-pointer
                 ${selected
                     ? 'bg-[var(--accent)]/15 border-[var(--accent)]/50 text-[var(--accent)]'
