@@ -23,6 +23,12 @@ export interface BoardConfig {
     threadCountApplies: boolean;
     /** Search field: where keywords appear ('subject' | 'comment' | 'both') */
     searchField: 'subject' | 'comment' | 'both';
+    /**
+     * Optional per-board allowlist: subject must contain at least one of these
+     * (case-insensitive, punctuation-normalized) for the thread to be eligible.
+     * Used to restrict noisy boards to a single general series.
+     */
+    requiredSubjectKeywords?: string[];
 }
 
 export const BOARDS: BoardConfig[] = [
@@ -74,6 +80,9 @@ export const BOARDS: BoardConfig[] = [
         imageDomain: '2ch.org',
         needsCloudflareBypass: false, isMeguca: false, threadCountApplies: true,
         searchField: 'subject',
+        // Only the "ПАНТЕОН ... БОГИНЬ" general series; skip off-topic threads
+        // like "Девочки подростки..." that incidentally mention k-pop.
+        requiredSubjectKeywords: ['пантеон'],
     },
     // Desuarchive boards — foolfuuka archive of 4chan
     // searchField varies: mu has term in subject, trash has term in comment

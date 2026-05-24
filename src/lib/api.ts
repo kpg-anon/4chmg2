@@ -250,12 +250,24 @@ export async function searchThreads(
             const threads = catalogData.threads || [];
             const matches: ThreadMatch[] = [];
 
+            // Normalize by stripping hyphens/punctuation so "kpop" matches "K-POP",
+            // "K POP", etc. 2ch /kpop/ OPs flip between formats (e.g. #1999 "KPOP"
+            // vs #2004 "K-POP") and naive substring match silently drops half of them.
+            const normalize = (s: string) => s.toLowerCase().replace(/[\s\-_.,!?()[\]{}'"]+/g, '');
+
+            const requiredNormalized = (config.requiredSubjectKeywords || []).map(normalize);
+
             for (const thread of threads) {
-                const subject = (thread.subject || '').toLowerCase();
-                const comment = (thread.comment || '').toLowerCase();
+                const subject = normalize(thread.subject || '');
+                const comment = normalize(thread.comment || '');
+
+                if (requiredNormalized.length > 0 && !requiredNormalized.some(r => subject.includes(r))) {
+                    continue;
+                }
 
                 const hasMatch = keywords.some(k => {
-                    const lower = k.toLowerCase();
+                    const lower = normalize(k);
+                    if (!lower) return false;
                     if (config.searchField === 'subject') return subject.includes(lower);
                     if (config.searchField === 'comment') return comment.includes(lower);
                     return subject.includes(lower) || comment.includes(lower);
@@ -273,13 +285,14 @@ export async function searchThreads(
                 }
             }
 
-            // Respect thread count limit (most recent first by lasthit)
+            // Catalog returns most-recent-first; in archive mode drop the active thread.
+            const pool = archived ? matches.slice(1) : matches;
             const limited = config.threadCountApplies
-                ? matches.slice(0, megucaThreadCount)
-                : matches;
+                ? pool.slice(0, megucaThreadCount)
+                : pool;
             allMatches.push(...limited);
 
-            console.log(`[Search] 2ch /${config.id}/: ${matches.length} matching, using ${limited.length}`);
+            console.log(`[Search] 2ch /${config.id}/: ${matches.length} matching${archived ? ' (archived, skipped newest)' : ''}, using ${limited.length}`);
             continue;
         }
 

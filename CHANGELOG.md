@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-05-24
+### 2ch /kpop/ search accuracy (v1.0.1)
+- Normalize hyphens, spaces, and punctuation when matching dvach catalog subjects so `kpop` matches both `KPOP` and `K-POP` (OP format changed at thread #2000)
+- Add `requiredSubjectKeywords` allowlist to `BoardConfig`; restrict `dvach:kpop` to the `ПАНТЕОН ... БОГИНЬ` general series so off-topic threads that incidentally mention k-pop are excluded
+- In archive mode, drop the most-recent matching thread from dvach results (mirrors meguca behavior) so the active general is never returned alongside the archive batch
+
 ## 2026-04-12
 ### New board: 2ch.org /kpop/
 - Add 2ch.org (Dvach) as a new board source with keyword-filtered catalog search

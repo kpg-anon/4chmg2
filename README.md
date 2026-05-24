@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.0-E445FF?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.0.1-E445FF?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/next.js-16-black?style=flat-square&logo=next.js" alt="Next.js">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
 </p>
