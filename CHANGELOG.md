@@ -1,6 +1,14 @@
 # Changelog
 
 ## 2026-05-24
+### Aggressive thumbnail prefetch (v1.1.0)
+- Bump `IntersectionObserver` `rootMargin` on grid thumbnails `200px` → `1500px` so the browser starts fetching well ahead of scroll
+- Bump outbound HTTP keep-alive pool `maxSockets` 16 → 64, `maxFreeSockets` 8 → 16 to avoid socket queueing during burst scroll + parallel cache warmup
+- Add client-side grid prefetcher (`useGridPrefetch` in `Gallery.tsx`): walks every thumbnail in the result set via `new Image()` at `fetchPriority: 'low'`, throttled to 6 concurrent, kicked off via `requestIdleCallback` so initial paint isn't blocked
+- Add server-side warmup endpoint `POST /api/warm`: client posts thumbnail URL batches; server fans out fetches at concurrency 4 into the disk cache with in-flight dedup and skip-if-cached. Same hostname allowlist as `/api/proxy`. Max 500 URLs per request
+- Add 10 GB cap + LRU-by-mtime eviction to the Node-side `.media-cache/` so aggressive prefetching can't fill the production 50 GB SSD. Eviction runs every 250 writes, single-flighted
+- New `isCached(url)` helper in `mediaCache.ts` for cheap presence checks
+
 ### Deprecate easychan
 - Remove `easychan:kr` from the board picker; easychan.net is defunct
 - Strike through the Easychan row in the README supported-boards table

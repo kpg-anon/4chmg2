@@ -2,17 +2,20 @@ import axios from 'axios';
 import * as http from 'http';
 import * as https from 'https';
 
+// Pool sized for burst scrolling + parallel cache warmup. Each board's CDN
+// gets its own per-host queue inside the agent, so 64 total ≈ ~16 per host
+// across the 4 active CDNs without hammering any single one.
 const httpAgent = new http.Agent({
     keepAlive: true,
-    maxSockets: 16,
-    maxFreeSockets: 8,
+    maxSockets: 64,
+    maxFreeSockets: 16,
     timeout: 30000,
 });
 
 const httpsAgent = new https.Agent({
     keepAlive: true,
-    maxSockets: 16,
-    maxFreeSockets: 8,
+    maxSockets: 64,
+    maxFreeSockets: 16,
     timeout: 30000,
 });
 

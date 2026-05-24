@@ -34,6 +34,10 @@ function LazyThumb({ src, alt, className, style }: { src: string; alt: string; c
         const img = imgRef.current;
         if (!img) return;
 
+        // Large rootMargin gives the browser time to fetch+decode before the
+        // user actually reaches the item, eliminating skeleton flashes during
+        // fast scroll. Anything already requested by the grid prefetcher (see
+        // useGridPrefetch) will be a warm browser-cache hit and paint instantly.
         const observer = new IntersectionObserver(
             ([entry]) => {
                 if (entry.isIntersecting) {
@@ -41,7 +45,7 @@ function LazyThumb({ src, alt, className, style }: { src: string; alt: string; c
                     observer.unobserve(img);
                 }
             },
-            { rootMargin: '200px' }
+            { rootMargin: '1500px' }
         );
 
         observer.observe(img);
@@ -119,8 +123,75 @@ const SOURCE_FAVICONS: Record<string, string> = {
     dvach: 'https://2ch.org/favicon.ico',
 };
 
+// Grid prefetcher: warms browser image cache for every thumbnail in the gallery
+// at low priority, so by the time the user scrolls a thumbnail into view it's
+// already a cache hit and `<img>` paints instantly without the skeleton fade.
+// Concurrency is capped so background prefetch never competes with the user's
+// in-viewport (high-priority) requests.
+const PREFETCH_CONCURRENCY = 6;
+const WARM_BATCH = 200;
+
+function useGridPrefetch(media: MediaItem[]) {
+    useEffect(() => {
+        if (!media.length || typeof window === 'undefined') return;
+
+        const thumbUrls = media.map(m => proxyUrl(m.thumbnail));
+        let cancelled = false;
+        let cursor = 0;
+        const inflight: HTMLImageElement[] = [];
+
+        const pump = () => {
+            if (cancelled) return;
+            while (inflight.length < PREFETCH_CONCURRENCY && cursor < thumbUrls.length) {
+                const url = thumbUrls[cursor++];
+                const img = new Image();
+                // fetchPriority is a recent HTMLImageElement field — TS lib may not have it yet
+                (img as HTMLImageElement & { fetchPriority?: string }).fetchPriority = 'low';
+                img.decoding = 'async';
+                const cleanup = () => {
+                    const idx = inflight.indexOf(img);
+                    if (idx >= 0) inflight.splice(idx, 1);
+                    pump();
+                };
+                img.onload = cleanup;
+                img.onerror = cleanup;
+                img.src = url;
+                inflight.push(img);
+            }
+        };
+
+        // Defer to idle time so initial render + visible thumbs paint first.
+        const ric = (window as Window & { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
+        const handle = ric
+            ? ric(() => pump())
+            : window.setTimeout(pump, 250);
+
+        // Server-side warm-up: tell the proxy to populate its disk cache for
+        // every thumbnail in the batch. Idempotent (skips already-cached URLs)
+        // and runs concurrently with the client prefetch — first user pays
+        // the upstream cost once, every subsequent user gets disk-cache hits.
+        const rawUrls = media.map(m => m.thumbnail);
+        for (let i = 0; i < rawUrls.length; i += WARM_BATCH) {
+            const chunk = rawUrls.slice(i, i + WARM_BATCH);
+            fetch('/api/warm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ urls: chunk }),
+                keepalive: true,
+            }).catch(() => { /* best-effort; client prefetch still warms the cache via /api/proxy */ });
+        }
+
+        return () => {
+            cancelled = true;
+            inflight.forEach(img => { img.src = ''; });
+            if (typeof handle === 'number') clearTimeout(handle);
+        };
+    }, [media]);
+}
+
 
 export default function Gallery({ media, initialSelectedIndex, newItemIds }: GalleryProps) {
+    useGridPrefetch(media);
     const [selectedIndex, setSelectedIndex] = useState<number | null>(initialSelectedIndex ?? null);
     const lastViewedIndexRef = useRef<number | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
