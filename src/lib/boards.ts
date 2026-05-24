@@ -56,14 +56,10 @@ export const BOARDS: BoardConfig[] = [
         needsCloudflareBypass: false, isMeguca: false, threadCountApplies: false,
         searchField: 'both',
     },
-    {
-        key: 'easychan:kr', id: 'kr', source: 'easychan',
-        label: 'Korea', siteLabel: 'Easychan',
-        baseUrl: 'https://easychan.net',
-        imageDomain: 'easychan.net',
-        needsCloudflareBypass: true, isMeguca: true, threadCountApplies: true,
-        searchField: 'both',
-    },
+    // easychan.net is defunct (2026-05). The BoardSource literal, search/proxy
+    // branches, FlareSolverr cookie handling, and Gallery favicon are kept in
+    // place so a future Cloudflare-fronted board can be re-enabled by adding a
+    // new BOARDS entry — no plumbing needs to be rewritten.
     {
         key: 'mokachan:kr', id: 'kr', source: 'mokachan',
         label: 'Korea', siteLabel: 'Mokachan',

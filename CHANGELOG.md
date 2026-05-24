@@ -1,6 +1,11 @@
 # Changelog
 
 ## 2026-05-24
+### Deprecate easychan
+- Remove `easychan:kr` from the board picker; easychan.net is defunct
+- Strike through the Easychan row in the README supported-boards table
+- Retain easychan handling in search, proxy allowlist, Gallery favicon, and FlareSolverr cookie code so a future Cloudflare-fronted board can be wired up by re-adding a single BOARDS entry
+
 ### 2ch /kpop/ search accuracy (v1.0.1)
 - Normalize hyphens, spaces, and punctuation when matching dvach catalog subjects so `kpop` matches both `KPOP` and `K-POP` (OP format changed at thread #2000)
 - Add `requiredSubjectKeywords` allowlist to `BoardConfig`; restrict `dvach:kpop` to the `ПАНТЕОН ... БОГИНЬ` general series so off-topic threads that incidentally mention k-pop are excluded
