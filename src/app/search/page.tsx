@@ -34,7 +34,7 @@ function SearchPageContent() {
     const didFetchRef = useRef('');
     const fetchedThreadsRef = useRef<ThreadMatch[]>([]);
     const knownMediaIdsRef = useRef(new Set<string>());
-    const [newItemIds, setNewItemIds] = useState<Set<number>>(new Set());
+    const [newItemIds, setNewItemIds] = useState<Set<string>>(new Set());
     const lastScrollYRef = useRef(0);
     const filenameFilterRef = useRef<HTMLDivElement>(null);
     const filenameInputRef = useRef<HTMLInputElement>(null);
@@ -120,7 +120,7 @@ function SearchPageContent() {
                     for (const m of combined) knownMediaIdsRef.current.add(`${m.boardKey}-${m.id}`);
                     return combined;
                 });
-                setNewItemIds(new Set(newMedia.map(m => m.id)));
+                setNewItemIds(new Set(newMedia.map(m => `${m.boardKey}-${m.id}`)));
                 setStatus(`${threadCount} threads | ${knownMediaIdsRef.current.size} media items (+${newMedia.length} new)`);
             } else {
                 setStatus(`${threadCount} threads | ${media.length} media items (no new posts)`);

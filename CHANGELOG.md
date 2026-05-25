@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-05-25
+### Batch selection and ZIP downloads (v1.2.0)
+- Add bottom-left gallery selection mode for choosing visible search results without covering thumbnails
+- Add batch ZIP export with generated files named `4chmg-selection-{epoch}.zip`
+- Add hover/focus `S` shortcut on search thumbnails for direct media download
+- Show transient darkened thumbnail download overlays with a high-contrast Lucide `ImageDown` icon while downloads are active
+- Use composite board/post media keys so refreshed search results do not collide across boards
+- Register `eslint-plugin-react-hooks` explicitly and downgrade React Compiler memoization preservation findings to warnings
+
 ## 2026-05-24
 ### Enter key always submits search (v1.1.1)
 - After clicking a board toggle the button kept keyboard focus, so pressing Enter re-activated it and untoggled the board instead of submitting

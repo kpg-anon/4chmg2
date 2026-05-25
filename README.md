@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.1.1-E445FF?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.2.0-E445FF?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/next.js-16-black?style=flat-square&logo=next.js" alt="Next.js">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
 </p>
@@ -27,6 +27,8 @@ Search by keyword across multiple imageboards simultaneously and browse all matc
 
 - [x] **Multi-board search** — Query 4chan, 2ch.hk, mokachan, and desuarchive at once
 - [x] **Unified gallery grid** — All results merged and sorted by timestamp
+- [x] **Batch downloads** — Select gallery results and export them as a ZIP
+- [x] **Fast thumbnail saves** — Hover a result and press `S` to download it in place
 - [x] **Full-featured lightbox** — Keyboard navigation, zoom/pan, slideshow, flip, download
 - [x] **Cloudflare bypass** — FlareSolverr integration for protected boards
 - [x] **OR search** — Separate keywords with `|` for multi-term matching

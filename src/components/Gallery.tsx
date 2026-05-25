@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useCallback, useRef, useEffect, useLayoutEffect, MouseEvent } from 'react';
+import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { MediaItem } from '@/lib/api';
 import {
     X, ExternalLink, Download, Play, Pause,
     FlipHorizontal, RotateCw, Maximize2, FileVideo, Image as ImageIcon,
-    ChevronDown, ChevronUp, Volume2, VolumeX
+    ChevronDown, ChevronUp, Volume2, VolumeX, Check, ImageDown,
+    CheckSquare, FileArchive
 } from 'lucide-react';
 
 // ── Nav Arrow Base64 Images ──
@@ -16,7 +17,7 @@ const BASE64_NEXT = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAF4AAABsCAYAA
 interface GalleryProps {
     media: MediaItem[];
     initialSelectedIndex?: number;
-    newItemIds?: Set<number>;
+    newItemIds?: Set<string>;
 }
 
 const VIDEO_EXTS = ['.webm', '.mp4'];
@@ -24,11 +25,109 @@ const proxyUrl = (url: string) => `/api/proxy?url=${encodeURIComponent(url)}`;
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 2000;
+const DOWNLOAD_OVERLAY_COMPLETE_MS = 650;
+const DOWNLOAD_OVERLAY_ERROR_MS = 1200;
+
+interface DownloadOverlayState {
+    progress: number;
+    status: 'active' | 'complete' | 'error';
+}
+
+const getMediaKey = (item: MediaItem) => `${item.boardKey}-${item.id}`;
+
+function sanitizeFilename(name: string): string {
+    const cleaned = name
+        .replace(/[<>:"/\\|?*\x00-\x1F]+/g, '_')
+        .replace(/\s+/g, ' ')
+        .trim();
+    return (cleaned || 'media').slice(0, 180);
+}
+
+function getDownloadFilename(item: MediaItem): string {
+    const ext = item.ext || '';
+    const raw = item.filename?.trim() || `media-${item.id}`;
+    const withExt = ext && raw.toLowerCase().endsWith(ext.toLowerCase()) ? raw : `${raw}${ext}`;
+    return sanitizeFilename(withExt);
+}
+
+function getUniqueZipPath(item: MediaItem, usedNames: Map<string, number>): string {
+    const folder = sanitizeFilename(`${item.source}-${item.boardId}`);
+    const filename = getDownloadFilename(item);
+    const dot = filename.lastIndexOf('.');
+    const base = dot > 0 ? filename.slice(0, dot) : filename;
+    const ext = dot > 0 ? filename.slice(dot) : '';
+    const initialPath = `${folder}/${filename}`;
+    const count = usedNames.get(initialPath) ?? 0;
+    usedNames.set(initialPath, count + 1);
+    if (count === 0) return initialPath;
+    return `${folder}/${base}-${count + 1}${ext}`;
+}
+
+function triggerBlobDownload(blob: Blob, filename: string): void {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+async function fetchMediaBlobWithProgress(item: MediaItem, onProgress: (progress: number) => void): Promise<Blob> {
+    onProgress(0.03);
+    const response = await fetch(proxyUrl(item.url));
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const contentType = response.headers.get('content-type') || undefined;
+    const contentLength = Number(response.headers.get('content-length'));
+    const total = Number.isFinite(contentLength) && contentLength > 0 ? contentLength : item.size;
+
+    if (!response.body) {
+        const blob = await response.blob();
+        onProgress(1);
+        return blob;
+    }
+
+    const reader = response.body.getReader();
+    const chunks: ArrayBuffer[] = [];
+    let received = 0;
+    let syntheticProgress = 0.08;
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        const chunk = new ArrayBuffer(value.byteLength);
+        new Uint8Array(chunk).set(value);
+        chunks.push(chunk);
+        received += value.byteLength;
+
+        if (total > 0) {
+            onProgress(Math.min(received / total, 0.98));
+        } else {
+            syntheticProgress = Math.min(syntheticProgress + 0.04, 0.9);
+            onProgress(syntheticProgress);
+        }
+    }
+
+    onProgress(1);
+    return new Blob(chunks, { type: contentType });
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    return target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target.isContentEditable;
+}
 
 function LazyThumb({ src, alt, className, style }: { src: string; alt: string; className: string; style?: React.CSSProperties }) {
     const imgRef = useRef<HTMLImageElement>(null);
     const retriesRef = useRef(0);
     const [loaded, setLoaded] = useState(false);
+    const loadedOpacity = typeof style?.opacity === 'number' ? style.opacity : 1;
 
     useEffect(() => {
         const img = imgRef.current;
@@ -70,7 +169,7 @@ function LazyThumb({ src, alt, className, style }: { src: string; alt: string; c
             ref={imgRef}
             alt={alt}
             className={className}
-            style={{ ...style, opacity: loaded ? 1 : 0, transition: 'opacity 0.2s ease, scale 0.3s ease, filter 0.3s ease' }}
+            style={{ ...style, opacity: loaded ? loadedOpacity : 0, transition: 'opacity 0.2s ease, scale 0.3s ease, filter 0.3s ease' }}
             onLoad={() => setLoaded(true)}
             onError={handleError}
         />
@@ -253,8 +352,212 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
     const [speedOverlay, setSpeedOverlay] = useState<{ text: string; key: number } | null>(null);
     const speedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [selectedVideoSrc, setSelectedVideoSrc] = useState('');
+    const [selectionMode, setSelectionMode] = useState(false);
+    const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+    const [hoveredMediaKey, setHoveredMediaKey] = useState<string | null>(null);
+    const [downloadOverlays, setDownloadOverlays] = useState<Record<string, DownloadOverlayState>>({});
+    const activeDownloadsRef = useRef<Set<string>>(new Set());
+    const overlayTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+    const [isBatchDownloading, setIsBatchDownloading] = useState(false);
+    const [batchStatus, setBatchStatus] = useState('');
+    const batchStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const selectedItems = useMemo(
+        () => media.filter(item => selectedKeys.has(getMediaKey(item))),
+        [media, selectedKeys]
+    );
+    const selectedCount = selectedItems.length;
 
     useEffect(() => { setPortalTarget(document.body); }, []);
+
+    useEffect(() => {
+        const available = new Set(media.map(getMediaKey));
+        setSelectedKeys(prev => {
+            let changed = false;
+            const next = new Set<string>();
+            prev.forEach(key => {
+                if (available.has(key)) {
+                    next.add(key);
+                } else {
+                    changed = true;
+                }
+            });
+            return changed ? next : prev;
+        });
+    }, [media]);
+
+    useEffect(() => {
+        const overlayTimers = overlayTimersRef.current;
+        return () => {
+            overlayTimers.forEach(timer => clearTimeout(timer));
+            overlayTimers.clear();
+            if (batchStatusTimerRef.current) clearTimeout(batchStatusTimerRef.current);
+        };
+    }, []);
+
+    const setDownloadOverlay = useCallback((key: string, progress: number, status: DownloadOverlayState['status'] = 'active') => {
+        const clamped = Math.max(0, Math.min(1, progress));
+        setDownloadOverlays(prev => ({ ...prev, [key]: { progress: clamped, status } }));
+    }, []);
+
+    const removeDownloadOverlaySoon = useCallback((key: string, delay: number) => {
+        const existing = overlayTimersRef.current.get(key);
+        if (existing) clearTimeout(existing);
+
+        const timer = setTimeout(() => {
+            setDownloadOverlays(prev => {
+                const next = { ...prev };
+                delete next[key];
+                return next;
+            });
+            overlayTimersRef.current.delete(key);
+        }, delay);
+        overlayTimersRef.current.set(key, timer);
+    }, []);
+
+    const completeDownloadOverlay = useCallback((key: string) => {
+        setDownloadOverlay(key, 1, 'complete');
+        removeDownloadOverlaySoon(key, DOWNLOAD_OVERLAY_COMPLETE_MS);
+    }, [removeDownloadOverlaySoon, setDownloadOverlay]);
+
+    const failDownloadOverlay = useCallback((key: string) => {
+        setDownloadOverlay(key, 1, 'error');
+        removeDownloadOverlaySoon(key, DOWNLOAD_OVERLAY_ERROR_MS);
+    }, [removeDownloadOverlaySoon, setDownloadOverlay]);
+
+    const clearBatchStatusSoon = useCallback(() => {
+        if (batchStatusTimerRef.current) clearTimeout(batchStatusTimerRef.current);
+        batchStatusTimerRef.current = setTimeout(() => {
+            setBatchStatus('');
+            batchStatusTimerRef.current = null;
+        }, 3000);
+    }, []);
+
+    const toggleItemSelection = useCallback((item: MediaItem) => {
+        const key = getMediaKey(item);
+        setSelectedKeys(prev => {
+            const next = new Set(prev);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
+            return next;
+        });
+    }, []);
+
+    const toggleSelectionMode = useCallback(() => {
+        if (selectionMode) {
+            setSelectionMode(false);
+            setSelectedKeys(new Set());
+        } else {
+            setSelectionMode(true);
+        }
+    }, [selectionMode]);
+
+    const selectAllVisible = useCallback(() => {
+        setSelectedKeys(new Set(media.map(getMediaKey)));
+        setSelectionMode(true);
+    }, [media]);
+
+    const clearSelection = useCallback(() => {
+        setSelectedKeys(new Set());
+    }, []);
+
+    const downloadSingleItem = useCallback(async (item: MediaItem) => {
+        const key = getMediaKey(item);
+        if (activeDownloadsRef.current.has(key)) return;
+        activeDownloadsRef.current.add(key);
+
+        try {
+            const blob = await fetchMediaBlobWithProgress(item, progress => {
+                setDownloadOverlay(key, progress);
+            });
+            triggerBlobDownload(blob, getDownloadFilename(item));
+            completeDownloadOverlay(key);
+        } catch (error) {
+            console.error('[Download] Error:', error);
+            failDownloadOverlay(key);
+        } finally {
+            activeDownloadsRef.current.delete(key);
+        }
+    }, [completeDownloadOverlay, failDownloadOverlay, setDownloadOverlay]);
+
+    const downloadSelectionZip = useCallback(async () => {
+        if (isBatchDownloading || selectedItems.length === 0) return;
+
+        setIsBatchDownloading(true);
+        setBatchStatus(`Preparing ${selectedItems.length} files...`);
+        if (batchStatusTimerRef.current) {
+            clearTimeout(batchStatusTimerRef.current);
+            batchStatusTimerRef.current = null;
+        }
+
+        let added = 0;
+        let failed = 0;
+
+        try {
+            const JSZip = (await import('jszip')).default;
+            const zip = new JSZip();
+            const usedNames = new Map<string, number>();
+
+            for (const item of selectedItems) {
+                const key = getMediaKey(item);
+                activeDownloadsRef.current.add(key);
+
+                try {
+                    const blob = await fetchMediaBlobWithProgress(item, progress => {
+                        setDownloadOverlay(key, Math.min(progress * 0.95, 0.95));
+                    });
+                    zip.file(getUniqueZipPath(item, usedNames), blob);
+                    added++;
+                    completeDownloadOverlay(key);
+                } catch (error) {
+                    failed++;
+                    console.error('[Batch Download] Error:', error);
+                    failDownloadOverlay(key);
+                } finally {
+                    activeDownloadsRef.current.delete(key);
+                    setBatchStatus(`Fetched ${added + failed}/${selectedItems.length} files...`);
+                }
+            }
+
+            if (added === 0) {
+                setBatchStatus('No files downloaded.');
+                clearBatchStatusSoon();
+                return;
+            }
+
+            setBatchStatus(`Creating ZIP (${added} files)...`);
+            const zipBlob = await zip.generateAsync(
+                {
+                    type: 'blob',
+                    compression: 'DEFLATE',
+                    compressionOptions: { level: 6 },
+                },
+                metadata => {
+                    setBatchStatus(`Creating ZIP ${Math.round(metadata.percent)}%...`);
+                }
+            );
+
+            const stamp = Date.now();
+            triggerBlobDownload(zipBlob, `4chmg-selection-${stamp}.zip`);
+            setBatchStatus(failed > 0 ? `ZIP ready (${added} files, ${failed} failed).` : `ZIP ready (${added} files).`);
+            setSelectedKeys(new Set());
+            setSelectionMode(false);
+            clearBatchStatusSoon();
+        } catch (error) {
+            console.error('[Batch Download] ZIP error:', error);
+            setBatchStatus('ZIP download failed.');
+            clearBatchStatusSoon();
+        } finally {
+            setIsBatchDownloading(false);
+        }
+    }, [
+        clearBatchStatusSoon,
+        completeDownloadOverlay,
+        failDownloadOverlay,
+        isBatchDownloading,
+        selectedItems,
+        setDownloadOverlay,
+    ]);
 
     // Continuous seekbar update loop — runs at display refresh rate while video is playing
     useEffect(() => {
@@ -608,6 +911,24 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
         return () => window.removeEventListener('keydown', handler);
     }, [selectedIndex, handleNext, handlePrev, toggleSlideshow, toggleFullscreen, closeLightbox, applyTransform, handleSave, toggleThumbDocked]);
 
+    useEffect(() => {
+        if (selectedIndex !== null || !hoveredMediaKey) return;
+
+        const handler = (e: KeyboardEvent) => {
+            if (e.key !== 's' && e.key !== 'S') return;
+            if (isEditableTarget(e.target)) return;
+
+            const item = media.find(m => getMediaKey(m) === hoveredMediaKey);
+            if (!item) return;
+
+            e.preventDefault();
+            void downloadSingleItem(item);
+        };
+
+        window.addEventListener('keydown', handler);
+        return () => window.removeEventListener('keydown', handler);
+    }, [downloadSingleItem, hoveredMediaKey, media, selectedIndex]);
+
     const handleWheel = useCallback((e: React.WheelEvent) => {
         e.preventDefault(); e.stopPropagation();
         const oldZoom = zoomRef.current;
@@ -744,23 +1065,103 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
 
     return (
         <>
+            {media.length > 0 && (
+                <div
+                    className="fixed bottom-5 z-30 flex items-end gap-2"
+                    style={{ left: 'max(0.75rem, calc((100vw - 80rem) / 2 - 4.5rem))' }}
+                >
+                    <div className="relative">
+                        <button
+                            type="button"
+                            onClick={toggleSelectionMode}
+                            className={`flex h-11 w-11 items-center justify-center rounded-lg border shadow-lg backdrop-blur-sm transition-all duration-150 cursor-pointer active:scale-95 ${selectionMode ? 'border-[var(--accent)] bg-[var(--accent)] text-white' : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:border-[var(--accent)] hover:text-[var(--accent)]'}`}
+                            aria-pressed={selectionMode}
+                            title={selectionMode ? 'Cancel selection' : 'Select media'}
+                        >
+                            {selectionMode ? <X size={18} /> : <CheckSquare size={18} />}
+                        </button>
+                    </div>
+
+                    {(selectionMode || isBatchDownloading) && (
+                        <div className="flex max-w-[calc(100vw-5.75rem)] flex-wrap items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-base)] px-2 py-2 shadow-xl">
+                            {selectionMode && (
+                                <>
+                                <button
+                                    type="button"
+                                    onClick={selectAllVisible}
+                                    className="flex h-9 items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 text-sm text-[var(--text-secondary)] transition-all duration-150 cursor-pointer hover:border-[var(--accent)] hover:text-[var(--accent)] active:scale-95"
+                                >
+                                    All
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={clearSelection}
+                                    disabled={selectedCount === 0}
+                                    className="flex h-9 items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 text-sm text-[var(--text-secondary)] transition-all duration-150 cursor-pointer hover:border-[var(--accent)] hover:text-[var(--accent)] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                                >
+                                    Clear
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={downloadSelectionZip}
+                                    disabled={selectedCount === 0 || isBatchDownloading}
+                                    className="flex h-9 items-center gap-2 rounded-md border border-[var(--accent)] bg-[var(--accent)] px-3 text-sm font-semibold text-white transition-all duration-150 cursor-pointer hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                                >
+                                    <FileArchive size={15} />
+                                    {isBatchDownloading ? 'Preparing...' : `ZIP (${selectedCount})`}
+                                </button>
+                                </>
+                            )}
+
+                            <div className="min-h-5 px-1 text-sm text-[var(--text-muted)]">
+                                {batchStatus || `${selectedCount} selected`}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 pb-4">
                 {media.map((item, index) => {
-                    const isNew = newItemIds?.has(item.id);
+                    const key = getMediaKey(item);
+                    const isNew = newItemIds?.has(key);
                     const isVideo = VIDEO_EXTS.includes(item.ext);
+                    const isSelected = selectedKeys.has(key);
+                    const downloadOverlay = downloadOverlays[key];
                     return (
                         <button
-                            key={`${item.boardKey}-${item.id}`}
+                            key={key}
                             id={`media-${index}`}
-                            onClick={() => { setSelectedIndex(index); resetTransform(); }}
-                            className={`group relative aspect-square bg-[var(--bg-surface)] rounded-lg overflow-hidden border-2 border-[var(--border)] hover:border-[var(--accent)] transition-[border-color] duration-150 cursor-pointer outline-none ${isNew ? 'opacity-0 animate-[fadeIn_0.3s_ease-out_forwards]' : ''}`}
+                            onClick={() => {
+                                if (selectionMode) {
+                                    toggleItemSelection(item);
+                                } else {
+                                    setSelectedIndex(index);
+                                    resetTransform();
+                                }
+                            }}
+                            onMouseEnter={() => setHoveredMediaKey(key)}
+                            onMouseLeave={() => setHoveredMediaKey(current => current === key ? null : current)}
+                            onFocus={() => setHoveredMediaKey(key)}
+                            onBlur={() => setHoveredMediaKey(current => current === key ? null : current)}
+                            aria-pressed={selectionMode ? isSelected : undefined}
+                            className={`group relative aspect-square bg-[var(--bg-surface)] rounded-lg overflow-hidden border-2 transition-[border-color] duration-150 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-base)] ${isSelected ? 'border-[var(--accent)]' : 'border-[var(--border)] hover:border-[var(--accent)]'} ${isNew ? 'opacity-0 animate-[fadeIn_0.3s_ease-out_forwards]' : ''}`}
                         >
-                            <LazyThumb src={proxyUrl(item.thumbnail)} alt={item.filename} className="object-cover w-full h-full group-hover:scale-105 group-hover:brightness-[0.85]" style={{ transformOrigin: 'center' }} />
+                            <LazyThumb src={proxyUrl(item.thumbnail)} alt={item.filename} className="object-cover w-full h-full group-hover:scale-105 group-hover:brightness-[0.85]" style={{ transformOrigin: 'center', opacity: downloadOverlay ? 0.45 : 1 }} />
+
+                            {selectionMode && (
+                                <span className={`absolute top-1.5 left-1.5 flex h-6 w-6 items-center justify-center rounded-md border transition-all duration-150 ${isSelected ? 'border-[var(--accent)] bg-[var(--accent)] text-white' : 'border-white/30 bg-black/45 text-white/50'}`}>
+                                    {isSelected && <Check size={15} strokeWidth={3} />}
+                                </span>
+                            )}
+
                             <div className="absolute bottom-1.5 right-1.5">
                                 <span className="text-white/80 bg-black/50 p-1 rounded text-xs inline-flex">
                                     {isVideo ? <FileVideo size={12} /> : <ImageIcon size={12} />}
                                 </span>
                             </div>
+
+                            {downloadOverlay && <DownloadProgressOverlay state={downloadOverlay} />}
                         </button>
                     );
                 })}
@@ -978,6 +1379,21 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
                 portalTarget
             )}
         </>
+    );
+}
+
+function DownloadProgressOverlay({ state }: { state: DownloadOverlayState }) {
+    const isComplete = state.status === 'complete';
+
+    return (
+        <div className="absolute inset-0 z-20 pointer-events-none" aria-hidden="true">
+            <div className="absolute inset-0 bg-black/76 backdrop-blur-[1px]" />
+            <div className="absolute inset-0 flex items-center justify-center">
+                <div className={`text-zinc-100/90 drop-shadow-2xl transition-transform duration-200 ${isComplete ? 'scale-110' : 'scale-100'}`}>
+                    <ImageDown size={58} strokeWidth={1.9} />
+                </div>
+            </div>
+        </div>
     );
 }
 
