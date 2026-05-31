@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-05-31
+### Major homepage revamp + settings, board configurator, and time scrollbar (v1.3.0)
+This release is headlined by a **major homepage revamp** that overhauls the landing experience, alongside several new features across search and the gallery.
+- **Major homepage revamp** — a ground-up redesign to a "Deep Space Utility" command-center layout: grid background, neon magenta/cyan accents, radial glow, mascot with fade mask, a live source-status panel that pings each upstream, and feature cards. Adopt Inter + JetBrains Mono via `next/font`
+- **Shared top navigation** (`SiteHeader`) with Explore / Boards tabs plus About and Settings entries
+- **About modal** with project info and repo link; the displayed version now auto-tracks `package.json` via `NEXT_PUBLIC_APP_VERSION` (exposed in `next.config.ts`) and never needs manual editing
+- **Settings modal** (localStorage `mg-settings`) with a configurable default search term (empty for new users) that pre-fills the home search box; built on an extensible `SettingRow` for future options
+- **In-browser Board Configurator** (`/boards`) — add custom boards on the supported sites (4chan, Mokachan, 2ch), hide built-ins, and hide/delete custom boards, persisted per-browser (`mg-custom-boards`, `mg-hidden-boards`). `getBoardByKey` synthesizes a config for custom keys from `SITE_TEMPLATES`, so custom boards work end-to-end with no API-route or proxy-allowlist changes (board ids validated, domains already allowlisted)
+- **Relative-time scrollbar** on search results — a custom right-edge rail with drag-scrub, track-click, and right-edge hover reveal showing the current position's relative post time; hides the native scrollbar while active
+- **Dock-style thumbnail magnify** in the lightbox strip — thumbnails scale toward the cursor with smooth proximity falloff (rAF-throttled, windowed, capped to fit the strip)
+- **Search form** — board chips centered on the homepage with the Archive/`N` controls held right; the meguca/dvach thread-count `N` input now appears only with the Archive toggle so selecting mokachan/2ch no longer shifts the layout; board chips are equally translucent toggled or not; new homepage placeholder `Search keyword(s) (eg kpop | k-pop)`
+- Allowlist `s.4cdn.org` in the media proxy so the 4chan source-status check resolves; extract `formatRelativeTime`/`formatExactTime` into `src/lib/time.ts`
+
 ## 2026-05-25
 ### Batch selection and ZIP downloads (v1.2.0)
 - Add bottom-left gallery selection mode for choosing visible search results without covering thumbnails

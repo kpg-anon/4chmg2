@@ -1,9 +1,11 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Search, Loader2, Check } from 'lucide-react';
-import { hasThreadCountBoards, getFourchanBoards, getMegucaBoards, getDvachBoards, getDesuarchiveBoards, type BoardConfig } from '@/lib/boards';
+import { Search, Loader2, Check, History } from 'lucide-react';
+import { getFourchanBoards, getMegucaBoards, getDvachBoards, getDesuarchiveBoards, type BoardConfig } from '@/lib/boards';
+import { getCustomBoardConfigs, loadHiddenKeys } from '@/lib/customBoards';
+import { loadSettings } from '@/lib/settings';
 
 interface SearchFormProps {
     isLoading?: boolean;
@@ -19,7 +21,7 @@ interface SearchFormProps {
 export default function SearchForm({
     isLoading = false,
     initialBoardKeys = ['4ch:mu', '4ch:trash'],
-    initialKeywords = 'kpop',
+    initialKeywords = '',
     initialThreadCount = 1,
     initialArchived = false,
     compact = false,
@@ -45,10 +47,10 @@ export default function SearchForm({
     const [threadCountEdit, setThreadCountEdit] = useState('');
     const [isEditingThreadCount, setIsEditingThreadCount] = useState(false);
 
-    const showThreadCount = useMemo(
-        () => hasThreadCountBoards(selectedKeys) || useDesuarchive,
-        [selectedKeys, useDesuarchive]
-    );
+    // N (meguca/dvach thread count) is only surfaced alongside the Archive toggle
+    // so selecting mokachan/2ch doesn't shift the layout. When hidden, the
+    // default threadCount still applies to those boards.
+    const showThreadCount = useDesuarchive;
 
     const selectedFourchanIds = useMemo(
         () => selectedKeys.filter(k => k.startsWith('4ch:')).map(k => k.split(':')[1]),
@@ -90,13 +92,30 @@ export default function SearchForm({
         router.push(`/search?boards=${boardsParam}&q=${encodeURIComponent(queryParam)}&threads=${threadCount}${archivedParam}`);
     };
 
-    const fourchanBoards = getFourchanBoards();
-    const megucaBoards = getMegucaBoards();
-    const dvachBoards = getDvachBoards();
+    // Custom boards + hidden built-ins live in localStorage. Load after mount so
+    // the SSR/first paint (built-ins only) matches hydration, then merge them in.
+    const [customBoards, setCustomBoards] = useState<BoardConfig[]>([]);
+    const [hiddenKeys, setHiddenKeys] = useState<Set<string>>(() => new Set());
+    useEffect(() => {
+        setCustomBoards(getCustomBoardConfigs());
+        setHiddenKeys(new Set(loadHiddenKeys()));
+    }, []);
 
-    // ── Board picker row (shared between full and compact+showBoardPicker modes) ──
-    const boardPickerContent = (
-        <div className="flex flex-wrap items-center gap-1.5">
+    // Home-page hero pre-fills the search box from the user's saved default term.
+    // (The compact search-header keeps the query passed in from the URL.)
+    useEffect(() => {
+        if (compact) return;
+        setQuery(loadSettings().defaultSearchTerm);
+    }, [compact]);
+
+    const visible = (boards: BoardConfig[]) => boards.filter(b => !hiddenKeys.has(b.key));
+    const fourchanBoards = visible([...getFourchanBoards(), ...customBoards.filter(b => b.source === '4chan')]);
+    const megucaBoards = visible([...getMegucaBoards(), ...customBoards.filter(b => b.source === 'mokachan')]);
+    const dvachBoards = visible([...getDvachBoards(), ...customBoards.filter(b => b.source === 'dvach')]);
+
+    // ── Board picker pieces (shared between full and compact+showBoardPicker modes) ──
+    const boardChips = (
+        <>
             {fourchanBoards.map(b => (
                 <BoardBtn key={b.key} board={b} selected={selectedKeys.includes(b.key)} onClick={() => toggleBoard(b.key)} />
             ))}
@@ -106,8 +125,12 @@ export default function SearchForm({
             {dvachBoards.map(b => (
                 <BoardBtn key={b.key} board={b} selected={selectedKeys.includes(b.key)} onClick={() => toggleBoard(b.key)} showSiteLabel />
             ))}
-            <div className="flex-1" />
-            {/* Desuarchive toggle + thread count — right-aligned */}
+        </>
+    );
+
+    // Desuarchive toggle + thread count
+    const archiveControls = (
+        <>
             {(hasFourchanSelected || hasMegucaSelected) && (
                 <label className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium cursor-pointer select-none border border-dashed transition-all duration-150
                     ${useDesuarchive
@@ -115,6 +138,7 @@ export default function SearchForm({
                         : 'bg-[var(--bg-elevated)] border-[var(--border)] text-[var(--text-secondary)] hover:border-[var(--text-muted)] hover:text-[var(--text-primary)]'
                     }`}>
                     <input type="checkbox" checked={useDesuarchive} onChange={toggleDesuarchive} className="hidden" />
+                    <History className="w-3 h-3" />
                     {useDesuarchive ? 'Archived' : 'Archive'}
                     {useDesuarchive && <Check className="w-2.5 h-2.5" />}
                 </label>
@@ -133,6 +157,15 @@ export default function SearchForm({
                     />
                 </div>
             )}
+        </>
+    );
+
+    // Compact / search-header layout: left-aligned chips, archive pushed to the right
+    const boardPickerContent = (
+        <div className="flex flex-wrap items-center gap-1.5">
+            {boardChips}
+            <div className="flex-1" />
+            {archiveControls}
         </div>
     );
 
@@ -164,22 +197,29 @@ export default function SearchForm({
     return (
         <div className="w-full max-w-2xl mx-auto">
             <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-                {/* Board buttons + desu checkbox + thread count — all one row */}
-                {boardPickerContent}
+                {/* Board chips centered across the bar width; archive + thread count held right */}
+                <div className="flex w-full items-center gap-2">
+                    <div className="flex flex-1 flex-wrap items-center justify-center gap-2">
+                        {boardChips}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                        {archiveControls}
+                    </div>
+                </div>
 
                 {/* Search Input + Button */}
-                <div className="flex gap-2 bg-[var(--bg-surface)] p-1.5 rounded-xl border border-[var(--border)]">
+                <div className="flex gap-2 bg-[var(--bg-surface)]/80 backdrop-blur-xl p-2 rounded-xl border border-[var(--border)] shadow-[0_8px_30px_rgba(0,0,0,0.35)] transition-colors duration-150 focus-within:border-[var(--accent-cyan)]">
                     <div className="flex-1 relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] w-4 h-4" />
+                        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)] w-4 h-4" />
                         <input
                             type="text" value={query} onChange={e => setQuery(e.target.value)}
-                            placeholder="Search keywords (use | for OR)"
-                            className="w-full bg-transparent text-[var(--text-primary)] placeholder-[var(--text-muted)] py-2.5 pl-9 pr-3 rounded-lg outline-none text-sm"
+                            placeholder="Search keyword(s) (eg kpop | k-pop)"
+                            className="w-full bg-transparent text-[var(--text-primary)] placeholder-[var(--text-muted)] py-3 pl-10 pr-3 rounded-lg outline-none text-sm"
                         />
                     </div>
                     <button
                         type="submit" disabled={isLoading || selectedKeys.length === 0}
-                        className="flex items-center justify-center gap-2 px-6 py-2.5 bg-[var(--accent)] hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-bold active:scale-95 transition-all cursor-pointer"
+                        className="flex items-center justify-center gap-2 px-7 py-3 bg-[var(--accent)] hover:brightness-110 hover:shadow-[0_0_15px_var(--accent-glow)] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:shadow-none text-white rounded-full text-sm font-bold active:scale-95 transition-all cursor-pointer"
                     >
                         {isLoading && <Loader2 className="animate-spin w-4 h-4" />}
                         {isLoading ? 'Searching...' : 'Search'}
@@ -204,10 +244,10 @@ function BoardBtn({ board, selected, onClick, showSiteLabel = false }: { board: 
     return (
         <button
             type="button" onClick={onClick} onKeyDown={handleKeyDown}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-all duration-150 border cursor-pointer
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-all duration-150 border cursor-pointer backdrop-blur-sm
                 ${selected
                     ? 'bg-[var(--accent)]/15 border-[var(--accent)]/50 text-[var(--accent)]'
-                    : 'bg-[var(--bg-elevated)] border-[var(--border)] text-[var(--text-secondary)] hover:border-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                    : 'bg-[var(--bg-elevated)]/15 border-[var(--border)] text-[var(--text-secondary)] hover:border-[var(--text-muted)] hover:text-[var(--text-primary)]'
                 }`}
         >
             /{board.id}/{showSiteLabel ? ` ${board.siteLabel}` : ''}

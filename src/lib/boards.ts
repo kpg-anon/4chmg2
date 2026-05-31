@@ -100,9 +100,86 @@ export const BOARDS: BoardConfig[] = [
     },
 ];
 
-/** Look up a board config by its unique key */
+// ── Supported-site templates (engine + domain) for the board configurator ──
+// Custom boards added in-browser reuse one of these already-integrated sites,
+// so their image domains are inherently within the proxy allowlist and no API
+// route or allowlist change is needed. The site id doubles as the key prefix.
+export interface SiteTemplate {
+    id: string;
+    source: BoardSource;
+    siteLabel: string;
+    baseUrl: string;
+    imageDomain: string;
+    needsCloudflareBypass: boolean;
+    isMeguca: boolean;
+    threadCountApplies: boolean;
+    defaultSearchField: 'subject' | 'comment' | 'both';
+}
+
+export const SITE_TEMPLATES: Record<string, SiteTemplate> = {
+    '4ch': {
+        id: '4ch', source: '4chan', siteLabel: '4chan',
+        baseUrl: 'https://a.4cdn.org', imageDomain: 'i.4cdn.org',
+        needsCloudflareBypass: false, isMeguca: false, threadCountApplies: false,
+        defaultSearchField: 'both',
+    },
+    'mokachan': {
+        id: 'mokachan', source: 'mokachan', siteLabel: 'Mokachan',
+        baseUrl: 'https://mokachan.cafe', imageDomain: 'mokachan.cafe',
+        needsCloudflareBypass: false, isMeguca: true, threadCountApplies: true,
+        defaultSearchField: 'both',
+    },
+    'dvach': {
+        id: 'dvach', source: 'dvach', siteLabel: '2ch',
+        baseUrl: 'https://2ch.org', imageDomain: '2ch.org',
+        needsCloudflareBypass: false, isMeguca: false, threadCountApplies: true,
+        defaultSearchField: 'both',
+    },
+    'desu': {
+        id: 'desu', source: 'desuarchive', siteLabel: 'Desuarchive',
+        baseUrl: 'https://desuarchive.org', imageDomain: 'desu-usergeneratedcontent.xyz',
+        needsCloudflareBypass: false, isMeguca: false, threadCountApplies: true,
+        defaultSearchField: 'both',
+    },
+};
+
+/** Site ids surfaced as choices in the board configurator (desu rides the Archive toggle). */
+export const CONFIGURABLE_SITE_IDS = ['4ch', 'mokachan', 'dvach'] as const;
+
+/** Board ids map to a URL path segment, so keep them to safe path characters. */
+export const VALID_BOARD_ID = /^[a-z0-9_]+$/i;
+
+/**
+ * Build a full board config from a supported-site template + board id. Used both
+ * to render custom chips (client) and to synthesize a config for a custom key on
+ * the server, so user-defined boards work end-to-end without a static entry.
+ */
+export function buildBoardConfig(siteId: string, boardId: string, label?: string): BoardConfig | undefined {
+    const site = SITE_TEMPLATES[siteId];
+    if (!site || !VALID_BOARD_ID.test(boardId)) return undefined;
+    return {
+        key: `${siteId}:${boardId}`,
+        id: boardId,
+        source: site.source,
+        label: label?.trim() || `/${boardId}/`,
+        siteLabel: site.siteLabel,
+        baseUrl: site.baseUrl,
+        imageDomain: site.imageDomain,
+        needsCloudflareBypass: site.needsCloudflareBypass,
+        isMeguca: site.isMeguca,
+        threadCountApplies: site.threadCountApplies,
+        searchField: site.defaultSearchField,
+    };
+}
+
+/** Look up a board config by its unique key, synthesizing custom boards on supported sites. */
 export function getBoardByKey(key: string): BoardConfig | undefined {
-    return BOARDS.find(b => b.key === key);
+    const builtin = BOARDS.find(b => b.key === key);
+    if (builtin) return builtin;
+    // Custom board on a supported site, e.g. "4ch:a" → synthesize from template.
+    const idx = key.indexOf(':');
+    if (idx <= 0) return undefined;
+    return buildBoardConfig(key.slice(0, idx), key.slice(idx + 1));
 }
 
 /** Look up a board config by matching a URL against imageDomain */

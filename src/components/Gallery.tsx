@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { MediaItem } from '@/lib/api';
+import { formatRelativeTime, formatExactTime } from '@/lib/time';
 import {
     X, ExternalLink, Download, Play, Pause,
     FlipHorizontal, RotateCw, Maximize2, FileVideo, Image as ImageIcon,
@@ -27,6 +28,12 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY = 2000;
 const DOWNLOAD_OVERLAY_COMPLETE_MS = 650;
 const DOWNLOAD_OVERLAY_ERROR_MS = 1200;
+
+// Thumbnail-strip dock magnify: thumbs grow toward the cursor with a smooth
+// proximity falloff. Capped at +0.25 so a 64px thumb reaches the 80px strip
+// height exactly (center origin) without being clipped by the strip's overflow.
+const DOCK_FALLOFF_PX = 120;
+const DOCK_MAX_ADD = 0.25;
 
 interface DownloadOverlayState {
     progress: number;
@@ -183,37 +190,6 @@ function formatSize(bytes: number): string {
     return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-function formatRelativeTime(tim: number): string {
-    if (!tim) return '';
-    const diff = Date.now() - tim;
-    const seconds = Math.floor(diff / 1000);
-    if (seconds < 60) return 'just now';
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes} minute${minutes !== 1 ? 's' : ''} ago`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours} hour${hours !== 1 ? 's' : ''} ago`;
-    const days = Math.floor(hours / 24);
-    if (days < 30) return `${days} day${days !== 1 ? 's' : ''} ago`;
-    const months = Math.floor(days / 30);
-    if (months < 12) return `${months} month${months !== 1 ? 's' : ''} ago`;
-    const years = Math.floor(months / 12);
-    return `${years} year${years !== 1 ? 's' : ''} ago`;
-}
-
-function formatExactTime(tim: number): string {
-    if (!tim) return '';
-    const d = new Date(tim);
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    const yy = String(d.getFullYear()).slice(-2);
-    let h = d.getHours();
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    h = h % 12 || 12;
-    const min = String(d.getMinutes()).padStart(2, '0');
-    const tz = d.toLocaleTimeString('en-US', { timeZoneName: 'short' }).split(' ').pop() || '';
-    return `${mm}${dd}${yy} ${h}:${min}${ampm} ${tz}`;
-}
-
 const SOURCE_FAVICONS: Record<string, string> = {
     '4chan': 'https://s.4cdn.org/image/favicon.ico',
     desuarchive: 'https://desuarchive.org/favicon.ico',
@@ -331,6 +307,9 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
     const imgRef = useRef<HTMLImageElement>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
     const thumbnailStripRef = useRef<HTMLDivElement>(null);
+    const dockRafRef = useRef<number | null>(null);
+    const dockPointerXRef = useRef(0);
+    const dockScaledRef = useRef<Set<number>>(new Set());
     const slideshowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const precacheRef = useRef<Set<string>>(new Set());
     const blobCacheRef = useRef<Map<string, string>>(new Map());
@@ -770,6 +749,78 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
         setThumbDocked(d => { const next = !d; localStorage.setItem('mg-thumb-docked', String(next)); return next; });
     }, []);
 
+    // ── Thumbnail-strip dock magnify ──
+    // Scale only the thumbs near the cursor. The strip's layout is uniform and
+    // CSS `scale` doesn't affect layout, so a thumb's center is stable under
+    // scaling — derive every center analytically from child 0 + a fixed pitch,
+    // touching just a small window around the pointer (O(1) per frame).
+    const applyDockScale = useCallback(() => {
+        const strip = thumbnailStripRef.current;
+        if (!strip) return;
+        const children = strip.children;
+        const n = children.length;
+        if (n === 0) return;
+
+        const clientX = dockPointerXRef.current;
+        const first = children[0] as HTMLElement;
+        const firstRect = first.getBoundingClientRect();
+        const firstCenter = firstRect.left + firstRect.width / 2;
+        let pitch = first.offsetWidth + 6; // gap-1.5
+        if (n > 1) {
+            const diff = (children[1] as HTMLElement).offsetLeft - first.offsetLeft;
+            if (diff > 0) pitch = diff;
+        }
+
+        const approx = Math.round((clientX - firstCenter) / pitch);
+        const radius = Math.ceil(DOCK_FALLOFF_PX / pitch) + 1;
+        const start = Math.max(0, approx - radius);
+        const end = Math.min(n - 1, approx + radius);
+
+        const next = new Set<number>();
+        for (let i = start; i <= end; i++) {
+            const center = firstCenter + i * pitch;
+            const t = Math.max(0, 1 - Math.abs(clientX - center) / DOCK_FALLOFF_PX);
+            if (t > 0) {
+                (children[i] as HTMLElement).style.scale = (1 + t * DOCK_MAX_ADD).toFixed(3);
+                next.add(i);
+            }
+        }
+        // Reset thumbs that left the active window.
+        dockScaledRef.current.forEach(i => {
+            if (!next.has(i)) {
+                const el = children[i] as HTMLElement | undefined;
+                if (el) el.style.scale = '';
+            }
+        });
+        dockScaledRef.current = next;
+    }, []);
+
+    const handleDockPointerMove = useCallback((e: React.PointerEvent) => {
+        dockPointerXRef.current = e.clientX;
+        if (dockRafRef.current !== null) return;
+        dockRafRef.current = requestAnimationFrame(() => {
+            dockRafRef.current = null;
+            applyDockScale();
+        });
+    }, [applyDockScale]);
+
+    const resetDockScale = useCallback(() => {
+        if (dockRafRef.current !== null) {
+            cancelAnimationFrame(dockRafRef.current);
+            dockRafRef.current = null;
+        }
+        const strip = thumbnailStripRef.current;
+        if (strip) {
+            dockScaledRef.current.forEach(i => {
+                const el = strip.children[i] as HTMLElement | undefined;
+                if (el) el.style.scale = '';
+            });
+        }
+        dockScaledRef.current = new Set();
+    }, []);
+
+    useEffect(() => () => { if (dockRafRef.current !== null) cancelAnimationFrame(dockRafRef.current); }, []);
+
     const handleSave = useCallback(async () => {
         const item = selectedIndex !== null ? media[selectedIndex] : null;
         if (!item) return;
@@ -1132,6 +1183,7 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
                         <button
                             key={key}
                             id={`media-${index}`}
+                            data-tim={item.tim}
                             onClick={() => {
                                 if (selectionMode) {
                                     toggleItemSelection(item);
@@ -1365,7 +1417,10 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
                         style={{ transform: thumbDocked ? 'translateY(0)' : 'translateY(100%)' }}
                         onClick={e => e.stopPropagation()}
                     >
-                        <div ref={thumbnailStripRef} className="h-20 bg-black flex items-center gap-1.5 px-3 overflow-x-auto" style={overlayFadeStyle}>
+                        <div ref={thumbnailStripRef} className="h-20 bg-black flex items-center gap-1.5 px-3 overflow-x-auto" style={overlayFadeStyle}
+                            onPointerMove={handleDockPointerMove}
+                            onPointerLeave={resetDockScale}
+                        >
                             {media.map((item, index) => (
                                     <button key={`thumb-${index}`} onClick={() => { setSelectedIndex(index); setIsPlaying(false); resetTransform(); }}
                                         className={`relative h-16 w-16 shrink-0 rounded overflow-hidden border-2 transition-all duration-100 cursor-pointer ${index === selectedIndex ? 'border-[var(--accent)] opacity-100' : 'border-transparent opacity-40 hover:opacity-80'}`}

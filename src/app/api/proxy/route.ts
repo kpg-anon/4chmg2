@@ -14,6 +14,7 @@ const CONTENT_TYPES: Record<string, string> = {
 
 const ALLOWED_HOSTNAMES = new Set([
     'i.4cdn.org',
+    's.4cdn.org',
     'is2.4chan.org',
     'easychan.net',
     'mokachan.cafe',

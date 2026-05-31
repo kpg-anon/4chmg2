@@ -9,6 +9,10 @@
     --accent: #E445FF;
     --accent-dim: rgba(228, 69, 255, 0.2);
     --accent-glow: rgba(228, 69, 255, 0.4);
+    /* Secondary / utility neon accents (Deep Space Utility design system) */
+    --accent-cyan: #14d1ff;
+    --accent-cyan-soft: #4cd6ff;
+    --accent-emerald: #4edea3;
     --text-primary: #f0f0f0;
     --text-secondary: #a0a0a8;
     --text-muted: #606068;
@@ -17,7 +21,21 @@
 body {
     background: var(--bg-base);
     color: var(--text-primary);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* ── Grid workspace texture ── */
+.grid-bg {
+    background-image:
+        linear-gradient(to right, color-mix(in srgb, var(--border) 55%, transparent) 1px, transparent 1px),
+        linear-gradient(to bottom, color-mix(in srgb, var(--border) 55%, transparent) 1px, transparent 1px);
+    background-size: 32px 32px;
+    background-position: center top;
+}
+
+/* ── Soft radial glow behind active hardware-like components ── */
+.glow-radial {
+    background: radial-gradient(circle at center, var(--accent-glow) 0%, transparent 65%);
 }
 
 /* ── Selection ── */
@@ -45,6 +63,10 @@ body {
 /* ── Hide scrollbar utility ── */
 .scrollbar-hide::-webkit-scrollbar { display: none; }
 .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ── Hide native scrollbar while the custom time-scrollbar rail is active ── */
+.mg-hide-native-scroll::-webkit-scrollbar { width: 0; height: 0; }
+.mg-hide-native-scroll { scrollbar-width: none; -ms-overflow-style: none; }
 
 /* ── Hide number input arrows ── */
 input[type="number"]::-webkit-inner-spin-button,

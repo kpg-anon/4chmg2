@@ -8,6 +8,7 @@ import { parseBoardKeys } from '@/lib/boards';
 import { searchThreads, getThreadMedia, type MediaItem, type ThreadMatch } from '@/lib/api';
 import SearchForm from '@/components/SearchForm';
 import Gallery from '@/components/Gallery';
+import TimeScrollbar from '@/components/TimeScrollbar';
 
 function SearchPageContent() {
     const searchParams = useSearchParams();
@@ -365,6 +366,8 @@ function SearchPageContent() {
             >
                 <ChevronUp size={24} />
             </button>
+
+            {filteredMedia.length > 0 && <TimeScrollbar />}
         </div>
     );
 }
