@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, MouseEvent } from 'react';
+import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, useImperativeHandle, forwardRef, Fragment, MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { MediaItem } from '@/lib/api';
 import { formatRelativeTime, formatExactTime } from '@/lib/time';
@@ -19,6 +19,12 @@ interface GalleryProps {
     media: MediaItem[];
     initialSelectedIndex?: number;
     newItemIds?: Set<string>;
+}
+
+export interface GalleryHandle {
+    /** Records the current viewport position of every tile so the next render
+     *  (after the parent clears newItemIds) can FLIP-animate the merge smoothly. */
+    captureMergeStart: () => void;
 }
 
 const VIDEO_EXTS = ['.webm', '.mp4'];
@@ -265,10 +271,11 @@ function useGridPrefetch(media: MediaItem[]) {
 }
 
 
-export default function Gallery({ media, initialSelectedIndex, newItemIds }: GalleryProps) {
+const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media, initialSelectedIndex, newItemIds }, ref) {
     useGridPrefetch(media);
     const [selectedIndex, setSelectedIndex] = useState<number | null>(initialSelectedIndex ?? null);
     const lastViewedIndexRef = useRef<number | null>(null);
+    const locateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [slideshowInterval, setSlideshowInterval] = useState(() => {
         if (typeof window !== 'undefined') {
@@ -281,6 +288,7 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
     const [mediaLoaded, setMediaLoaded] = useState(false);
     const [overlayVisible, setOverlayVisible] = useState(true);
     const [isFullscreen, setIsFullscreen] = useState(false);
+    const [locateBand, setLocateBand] = useState<{ top: number; height: number; key: number } | null>(null);
     const overlayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [intervalEditValue, setIntervalEditValue] = useState('');
     const [isEditingInterval, setIsEditingInterval] = useState(false);
@@ -306,6 +314,9 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
 
     const imgRef = useRef<HTMLImageElement>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
+    const gridRef = useRef<HTMLDivElement>(null);
+    const mergePendingRef = useRef(false);
+    const flipPrevRef = useRef<Map<string, { top: number; left: number }>>(new Map());
     const thumbnailStripRef = useRef<HTMLDivElement>(null);
     const dockRafRef = useRef<number | null>(null);
     const dockPointerXRef = useRef(0);
@@ -340,6 +351,31 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
     const [isBatchDownloading, setIsBatchDownloading] = useState(false);
     const [batchStatus, setBatchStatus] = useState('');
     const batchStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // ── Download-complete toasts — slide in, stack, then fade out ──
+    const [toasts, setToasts] = useState<{ id: number; label: string; exiting: boolean }[]>([]);
+    const toastTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>[]>>(new Map());
+
+    const pushToast = useCallback((filename: string) => {
+        const id = Date.now() + Math.random();
+        setToasts(prev => [...prev, { id, label: filename, exiting: false }]);
+        const fade = setTimeout(() => {
+            setToasts(prev => prev.map(t => (t.id === id ? { ...t, exiting: true } : t)));
+        }, 2400);
+        const remove = setTimeout(() => {
+            setToasts(prev => prev.filter(t => t.id !== id));
+            toastTimersRef.current.delete(id);
+        }, 2750);
+        toastTimersRef.current.set(id, [fade, remove]);
+    }, []);
+
+    useEffect(() => {
+        const timers = toastTimersRef.current;
+        return () => {
+            timers.forEach(pair => pair.forEach(clearTimeout));
+            timers.clear();
+        };
+    }, []);
 
     const selectedItems = useMemo(
         () => media.filter(item => selectedKeys.has(getMediaKey(item))),
@@ -451,13 +487,14 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
             });
             triggerBlobDownload(blob, getDownloadFilename(item));
             completeDownloadOverlay(key);
+            pushToast(getDownloadFilename(item));
         } catch (error) {
             console.error('[Download] Error:', error);
             failDownloadOverlay(key);
         } finally {
             activeDownloadsRef.current.delete(key);
         }
-    }, [completeDownloadOverlay, failDownloadOverlay, setDownloadOverlay]);
+    }, [completeDownloadOverlay, failDownloadOverlay, pushToast, setDownloadOverlay]);
 
     const downloadSelectionZip = useCallback(async () => {
         if (isBatchDownloading || selectedItems.length === 0) return;
@@ -517,7 +554,9 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
             );
 
             const stamp = Date.now();
-            triggerBlobDownload(zipBlob, `4chmg-selection-${stamp}.zip`);
+            const zipName = `4chmg-selection-${stamp}.zip`;
+            triggerBlobDownload(zipBlob, zipName);
+            pushToast(zipName);
             setBatchStatus(failed > 0 ? `ZIP ready (${added} files, ${failed} failed).` : `ZIP ready (${added} files).`);
             setSelectedKeys(new Set());
             setSelectionMode(false);
@@ -534,6 +573,7 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
         completeDownloadOverlay,
         failDownloadOverlay,
         isBatchDownloading,
+        pushToast,
         selectedItems,
         setDownloadOverlay,
     ]);
@@ -578,12 +618,37 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
         if (selectedIndex !== null) {
             lastViewedIndexRef.current = selectedIndex;
             document.body.style.overflow = 'hidden';
+            setLocateBand(null);
         } else {
             document.body.style.overflow = '';
             const idx = lastViewedIndexRef.current;
             if (idx !== null) {
                 const el = document.getElementById(`media-${idx}`);
-                if (el) el.scrollIntoView({ behavior: 'auto', block: 'center' });
+                const grid = gridRef.current;
+                if (el) {
+                    // Smoothly scroll the tile the user was viewing back into the
+                    // centre and pulse-highlight it — plus a full-bleed grey band
+                    // across its whole row — so they can re-orient instead of being
+                    // teleported to an unmarked spot.
+                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    el.classList.remove('mg-locate');
+                    void el.offsetWidth; // force reflow so the animation restarts
+                    el.classList.add('mg-locate');
+                    if (grid) {
+                        // Position is relative to the grid (which scrolls with the
+                        // page), so the rect delta is scroll-independent.
+                        const gr = grid.getBoundingClientRect();
+                        const r = el.getBoundingClientRect();
+                        const pad = 6;
+                        setLocateBand({ top: r.top - gr.top - pad, height: r.height + pad * 2, key: Date.now() });
+                    }
+                    if (locateTimerRef.current) clearTimeout(locateTimerRef.current);
+                    locateTimerRef.current = setTimeout(() => {
+                        el.classList.remove('mg-locate');
+                        setLocateBand(null);
+                        locateTimerRef.current = null;
+                    }, 1800);
+                }
             }
         }
         return () => { document.body.style.overflow = ''; };
@@ -621,6 +686,10 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
         }
         if (mediaRotateRef.current) {
             const flip = isFlippedRef.current ? -1 : 1;
+            // Keep the rotate() value stable across flip toggles so flipping only
+            // animates the mirror (scaleX), never a rotation swing. "Always
+            // clockwise" is handled at the source by flipping the step direction
+            // of the rotate control while mirrored (see rotateStep).
             mediaRotateRef.current.style.transform = `scaleX(${flip}) rotate(${rotationRef.current}deg)`;
         }
         // Resize video wrapper to match rotated visual dimensions
@@ -638,6 +707,13 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
             }
         }
     }, []);
+
+    // Rotate one quarter-turn. While mirrored, step the angle the other way so
+    // the on-screen spin still reads clockwise (scaleX reverses visual direction).
+    const rotateStep = useCallback(() => {
+        rotationRef.current += isFlippedRef.current ? -90 : 90;
+        applyTransform();
+    }, [applyTransform]);
 
     const resetTransform = useCallback(() => {
         zoomRef.current = 1;
@@ -821,6 +897,65 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
 
     useEffect(() => () => { if (dockRafRef.current !== null) cancelAnimationFrame(dockRafRef.current); }, []);
 
+    useEffect(() => () => { if (locateTimerRef.current) clearTimeout(locateTimerRef.current); }, []);
+
+    // ── Smooth "merge" of new items when the divider is removed ──
+    // The parent calls captureMergeStart() in the same tick it clears newItemIds
+    // (when the user reaches the bottom). It snapshots every tile's *viewport*
+    // position. The layout effect below then measures where each tile landed
+    // after the divider was removed — and after any scroll-clamp the removal
+    // triggered — and plays an inverted transform back to the old spot, animating
+    // to the new one. Capturing in viewport space at the exact merge instant keeps
+    // the slide smooth even when the page scroll jumps, which is what made the
+    // previous (document-space, batch-time) version feel sudden.
+    useImperativeHandle(ref, () => ({
+        captureMergeStart() {
+            const grid = gridRef.current;
+            const map = new Map<string, { top: number; left: number }>();
+            if (grid) {
+                grid.querySelectorAll<HTMLElement>('[data-mkey]').forEach(el => {
+                    const r = el.getBoundingClientRect();
+                    map.set(el.dataset.mkey || '', { top: r.top, left: r.left });
+                });
+            }
+            flipPrevRef.current = map;
+            mergePendingRef.current = map.size > 0;
+        },
+    }), []);
+
+    useLayoutEffect(() => {
+        if (!mergePendingRef.current) return;
+        mergePendingRef.current = false;
+        const grid = gridRef.current;
+        if (!grid) return;
+        const prev = flipPrevRef.current;
+        const vh = window.innerHeight;
+        const moved: HTMLElement[] = [];
+        grid.querySelectorAll<HTMLElement>('[data-mkey]').forEach(el => {
+            const before = prev.get(el.dataset.mkey || '');
+            if (!before) return;
+            const rect = el.getBoundingClientRect();
+            const dx = before.left - rect.left;
+            const dy = before.top - rect.top;
+            if (!dx && !dy) return;
+            // Skip tiles far outside the viewport — they'd animate invisibly.
+            if (rect.bottom < -300 || rect.top > vh + 300) return;
+            el.style.transition = 'none';
+            el.style.transform = `translate(${dx}px, ${dy}px)`;
+            moved.push(el);
+        });
+        if (!moved.length) return;
+        requestAnimationFrame(() => {
+            moved.forEach(el => {
+                el.style.transition = 'transform 0.5s cubic-bezier(0.22, 1, 0.36, 1)';
+                el.style.transform = '';
+            });
+            window.setTimeout(() => {
+                moved.forEach(el => { el.style.transition = ''; el.style.transform = ''; });
+            }, 560);
+        });
+    }, [newItemIds]);
+
     const handleSave = useCallback(async () => {
         const item = selectedIndex !== null ? media[selectedIndex] : null;
         if (!item) return;
@@ -831,14 +966,34 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
 
         const hasTransform = isFlippedRef.current || rotationRef.current !== 0;
 
-        // Videos or untransformed: direct download
+        // Videos or untransformed: download without re-encoding.
         if (isVideo || !hasTransform) {
-            const a = document.createElement('a');
-            a.href = itemProxyUrl;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+            if (isVideo) {
+                // Videos honor the <a download> attribute reliably (webm/mp4).
+                const a = document.createElement('a');
+                a.href = itemProxyUrl;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            } else {
+                // Images: fetch as a blob and download. Some browsers ignore the
+                // <a download> attribute for inline-renderable types like webp and
+                // open them in a new tab instead — the blob path always saves.
+                try {
+                    const res = await fetch(itemProxyUrl);
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    triggerBlobDownload(await res.blob(), filename);
+                } catch {
+                    const a = document.createElement('a');
+                    a.href = itemProxyUrl;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                }
+            }
+            pushToast(filename);
             return;
         }
 
@@ -849,6 +1004,7 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
             img.src = itemProxyUrl;
             await new Promise<void>((resolve, reject) => { img.onload = () => resolve(); img.onerror = reject; });
 
+            // Matches the on-screen transform: scaleX(flip) rotate(rotation).
             const rot = ((rotationRef.current % 360) + 360) % 360;
             const swapDims = rot === 90 || rot === 270;
             const canvas = document.createElement('canvas');
@@ -878,6 +1034,7 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
                 a.click();
                 document.body.removeChild(a);
                 URL.revokeObjectURL(url);
+                pushToast(filename);
             }, mimeType, quality);
         } catch {
             // Fallback to direct download
@@ -887,8 +1044,9 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
+            pushToast(filename);
         }
-    }, [selectedIndex, media]);
+    }, [selectedIndex, media, pushToast]);
 
     useEffect(() => {
         const item = selectedIndex !== null ? media[selectedIndex] : null;
@@ -953,14 +1111,13 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
                     }
                     break;
                 case 'r': case 'R':
-                    rotationRef.current += 90;
-                    applyTransform();
+                    rotateStep();
                     break;
             }
         };
         window.addEventListener('keydown', handler);
         return () => window.removeEventListener('keydown', handler);
-    }, [selectedIndex, handleNext, handlePrev, toggleSlideshow, toggleFullscreen, closeLightbox, applyTransform, handleSave, toggleThumbDocked]);
+    }, [selectedIndex, handleNext, handlePrev, toggleSlideshow, toggleFullscreen, closeLightbox, applyTransform, rotateStep, handleSave, toggleThumbDocked]);
 
     useEffect(() => {
         if (selectedIndex !== null || !hoveredMediaKey) return;
@@ -984,15 +1141,21 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
         e.preventDefault(); e.stopPropagation();
         const oldZoom = zoomRef.current;
         const newZoom = Math.max(0.1, Math.min(10, e.deltaY > 0 ? oldZoom * 0.9 : oldZoom * 1.1));
-        // Adjust pan so zoom centers on cursor position
         const cr = contentAreaRef.current?.getBoundingClientRect();
-        if (cr) {
+        const mediaEl = videoRef.current || imgRef.current;
+        const mr = mediaEl?.getBoundingClientRect();
+        // Only follow the cursor once the media fills the viewport. Before that
+        // (the image still fits on screen) keep the zoom centered.
+        const fills = !!(cr && mr && mr.width >= cr.width - 1 && mr.height >= cr.height - 1);
+        if (cr && fills) {
             const cx = e.clientX - (cr.left + cr.width / 2);
             const cy = e.clientY - (cr.top + cr.height / 2);
             panRef.current = {
                 x: panRef.current.x + cx * (1 / newZoom - 1 / oldZoom),
                 y: panRef.current.y + cy * (1 / newZoom - 1 / oldZoom),
             };
+        } else {
+            panRef.current = { x: 0, y: 0 };
         }
         zoomRef.current = newZoom;
         applyTransform();
@@ -1095,6 +1258,12 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
 
     const selectedItem = selectedIndex !== null ? media[selectedIndex] : null;
 
+    // Boundary for the "New posts" divider in the grid: index of the first item
+    // flagged new by the last refresh. -1 (or 0) means no divider is drawn.
+    const firstNewIndex = newItemIds && newItemIds.size > 0
+        ? media.findIndex(item => newItemIds.has(getMediaKey(item)))
+        : -1;
+
     const getSourceLink = (item: MediaItem) => {
         if (item.source === 'desuarchive') return `https://desuarchive.org/${item.boardId}/thread/${item.threadId}#${item.id}`;
         if (item.source === '4chan') return `https://boards.4chan.org/${item.boardId}/thread/${item.threadId}#p${item.id}`;
@@ -1172,17 +1341,34 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
                 </div>
             )}
 
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 pb-4">
+            <div ref={gridRef} className="relative grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 pb-4">
+                {locateBand && (
+                    <div
+                        key={locateBand.key}
+                        className="mg-locate-band"
+                        style={{ top: locateBand.top, height: locateBand.height }}
+                        aria-hidden="true"
+                    />
+                )}
                 {media.map((item, index) => {
                     const key = getMediaKey(item);
                     const isNew = newItemIds?.has(key);
                     const isVideo = VIDEO_EXTS.includes(item.ext);
                     const isSelected = selectedKeys.has(key);
                     const downloadOverlay = downloadOverlays[key];
+                    const showNewDivider = index === firstNewIndex && firstNewIndex > 0;
                     return (
+                        <Fragment key={key}>
+                        {showNewDivider && (
+                            <div className="col-span-full flex items-center gap-3 py-1" aria-hidden="true">
+                                <div className="h-px flex-1 bg-[color:color-mix(in_srgb,var(--accent)_45%,transparent)]" />
+                                <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--accent)]">New posts</span>
+                                <div className="h-px flex-1 bg-[color:color-mix(in_srgb,var(--accent)_45%,transparent)]" />
+                            </div>
+                        )}
                         <button
-                            key={key}
                             id={`media-${index}`}
+                            data-mkey={key}
                             data-tim={item.tim}
                             onClick={() => {
                                 if (selectionMode) {
@@ -1213,8 +1399,9 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
                                 </span>
                             </div>
 
-                            {downloadOverlay && <DownloadProgressOverlay state={downloadOverlay} />}
+                            {downloadOverlay && <DownloadProgressOverlay state={downloadOverlay} isVideo={isVideo} />}
                         </button>
+                        </Fragment>
                     );
                 })}
             </div>
@@ -1229,7 +1416,7 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
                         </div>
                         <div className="flex gap-1 items-center">
                             <TbBtn onClick={() => { isFlippedRef.current = !isFlippedRef.current; applyTransform(); }} title="Flip (H)"><FlipHorizontal size={18} /></TbBtn>
-                            <TbBtn onClick={() => { rotationRef.current += 90; applyTransform(); }} title="Rotate (R)"><RotateCw size={18} /></TbBtn>
+                            <TbBtn onClick={rotateStep} title="Rotate (R)"><RotateCw size={18} /></TbBtn>
                             <div className="flex items-center bg-white/10 rounded-lg overflow-hidden border border-white/10">
                                 <TbBtn onClick={toggleSlideshow} title="Slideshow">{isPlaying ? <Pause size={18} /> : <Play size={18} />}</TbBtn>
                                 {isPlaying && <input type="number" className="w-10 bg-transparent text-white text-center text-sm p-1 border-l border-white/20 outline-none caret-transparent selection:bg-[var(--accent)]"
@@ -1420,6 +1607,15 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
                         <div ref={thumbnailStripRef} className="h-20 bg-black flex items-center gap-1.5 px-3 overflow-x-auto" style={overlayFadeStyle}
                             onPointerMove={handleDockPointerMove}
                             onPointerLeave={resetDockScale}
+                            onWheel={e => {
+                                // Mouse wheels emit vertical deltaY; translate it to
+                                // horizontal scroll so the strip pans with a wheel too
+                                // (trackpads already supply deltaX).
+                                const el = thumbnailStripRef.current;
+                                if (el && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+                                    el.scrollLeft += e.deltaY;
+                                }
+                            }}
                         >
                             {media.map((item, index) => (
                                     <button key={`thumb-${index}`} onClick={() => { setSelectedIndex(index); setIsPlaying(false); resetTransform(); }}
@@ -1433,11 +1629,30 @@ export default function Gallery({ media, initialSelectedIndex, newItemIds }: Gal
                 </div>,
                 portalTarget
             )}
+
+            {portalTarget && toasts.length > 0 && createPortal(
+                <div className={`fixed left-4 z-[10000] flex flex-col items-start gap-2 pointer-events-none transition-[bottom] duration-300 ease-out ${selectedIndex !== null && thumbDocked ? 'bottom-24' : 'bottom-4'}`}>
+                    {toasts.map(toast => (
+                        <div
+                            key={toast.id}
+                            className={`flex items-center gap-2 max-w-[min(20rem,80vw)] rounded-lg border border-[color:color-mix(in_srgb,var(--accent-emerald)_55%,transparent)] bg-[color:color-mix(in_srgb,var(--accent-emerald)_18%,var(--bg-elevated))] px-3 py-2 text-sm text-[var(--text-primary)] shadow-xl backdrop-blur-sm ${toast.exiting ? 'toast-exit' : 'toast-enter'}`}
+                        >
+                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--accent-emerald)] text-black">
+                                <Check size={13} strokeWidth={3.5} />
+                            </span>
+                            <span className="truncate"><span className="font-medium">{toast.label}</span> saved</span>
+                        </div>
+                    ))}
+                </div>,
+                portalTarget
+            )}
         </>
     );
-}
+});
 
-function DownloadProgressOverlay({ state }: { state: DownloadOverlayState }) {
+export default Gallery;
+
+function DownloadProgressOverlay({ state, isVideo = false }: { state: DownloadOverlayState; isVideo?: boolean }) {
     const isComplete = state.status === 'complete';
 
     return (
@@ -1445,7 +1660,7 @@ function DownloadProgressOverlay({ state }: { state: DownloadOverlayState }) {
             <div className="absolute inset-0 bg-black/76 backdrop-blur-[1px]" />
             <div className="absolute inset-0 flex items-center justify-center">
                 <div className={`text-zinc-100/90 drop-shadow-2xl transition-transform duration-200 ${isComplete ? 'scale-110' : 'scale-100'}`}>
-                    <ImageDown size={58} strokeWidth={1.9} />
+                    {isVideo ? <FileVideo size={58} strokeWidth={1.9} /> : <ImageDown size={58} strokeWidth={1.9} />}
                 </div>
             </div>
         </div>

@@ -3,11 +3,11 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
-import { Check, ChevronUp, RefreshCw, Funnel, SlidersHorizontal, X } from 'lucide-react';
+import { Check, ChevronUp, ChevronDown, RefreshCw, Funnel, SlidersHorizontal, X } from 'lucide-react';
 import { parseBoardKeys } from '@/lib/boards';
 import { searchThreads, getThreadMedia, type MediaItem, type ThreadMatch } from '@/lib/api';
 import SearchForm from '@/components/SearchForm';
-import Gallery from '@/components/Gallery';
+import Gallery, { type GalleryHandle } from '@/components/Gallery';
 import TimeScrollbar from '@/components/TimeScrollbar';
 
 function SearchPageContent() {
@@ -25,6 +25,9 @@ function SearchPageContent() {
     const [status, setStatus] = useState('');
     const [threadCount, setThreadCount] = useState(0);
     const [showScrollTop, setShowScrollTop] = useState(false);
+    const [showScrollBottom, setShowScrollBottom] = useState(false);
+    const [autoRefresh, setAutoRefresh] = useState(false);
+    const [autoRefreshMs, setAutoRefreshMs] = useState(300000);
     const [headerVisible, setHeaderVisible] = useState(true);
     const [mediaFilter, setMediaFilter] = useState<'mixed' | 'images' | 'videos'>('mixed');
     const [filterOpen, setFilterOpen] = useState(false);
@@ -39,6 +42,8 @@ function SearchPageContent() {
     const lastScrollYRef = useRef(0);
     const filenameFilterRef = useRef<HTMLDivElement>(null);
     const filenameInputRef = useRef<HTMLInputElement>(null);
+    const galleryRef = useRef<GalleryHandle>(null);
+    const newItemIdsRef = useRef(newItemIds);
 
     const boardKeys = parseBoardKeys(boardParam);
     const keywords = queryParam.split('|').filter(Boolean);
@@ -121,7 +126,14 @@ function SearchPageContent() {
                     for (const m of combined) knownMediaIdsRef.current.add(`${m.boardKey}-${m.id}`);
                     return combined;
                 });
-                setNewItemIds(new Set(newMedia.map(m => `${m.boardKey}-${m.id}`)));
+                // Accumulate, don't replace: successive auto-refresh batches all
+                // stack below the same "New posts" line until the user scrolls to
+                // the bottom (which clears the set and merges them in).
+                setNewItemIds(prev => {
+                    const next = new Set(prev);
+                    for (const m of newMedia) next.add(`${m.boardKey}-${m.id}`);
+                    return next;
+                });
                 setStatus(`${threadCount} threads | ${knownMediaIdsRef.current.size} media items (+${newMedia.length} new)`);
             } else {
                 setStatus(`${threadCount} threads | ${media.length} media items (no new posts)`);
@@ -138,7 +150,18 @@ function SearchPageContent() {
     useEffect(() => {
         const handleScroll = () => {
             const y = window.scrollY;
+            const docHeight = document.documentElement.scrollHeight;
+            const distanceFromBottom = docHeight - (y + window.innerHeight);
             setShowScrollTop(y > 400);
+            setShowScrollBottom(distanceFromBottom > 400);
+            // Reaching the bottom merges the new items in (clears the "New posts"
+            // divider). Snapshot tile positions first so the Gallery can FLIP the
+            // layout change into a smooth slide instead of a jump.
+            if (distanceFromBottom < 80 && newItemIdsRef.current.size > 0) {
+                galleryRef.current?.captureMergeStart();
+                newItemIdsRef.current = new Set();
+                setNewItemIds(new Set());
+            }
             // Hide header when scrolling down past 100px, show when at top
             if (y < 50) {
                 setHeaderVisible(true);
@@ -156,6 +179,50 @@ function SearchPageContent() {
             requestAnimationFrame(() => filenameInputRef.current?.focus());
         }
     }, [filenameFilterOpen]);
+
+    // Mirror newItemIds into a ref so the (deps-free) scroll handler can read the
+    // current value without re-subscribing on every refresh.
+    useEffect(() => { newItemIdsRef.current = newItemIds; }, [newItemIds]);
+
+    // Ctrl/Cmd+F opens the filename filter instead of the browser's find bar.
+    useEffect(() => {
+        const handler = (e: KeyboardEvent) => {
+            if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+                e.preventDefault();
+                setFilenameFilterOpen(true);
+                requestAnimationFrame(() => filenameInputRef.current?.focus());
+            }
+        };
+        window.addEventListener('keydown', handler);
+        return () => window.removeEventListener('keydown', handler);
+    }, []);
+
+    // Restore the auto-refresh preferences on mount.
+    useEffect(() => {
+        setAutoRefresh(localStorage.getItem('mg-auto-refresh') === 'true');
+        const storedMs = parseInt(localStorage.getItem('mg-auto-refresh-ms') || '', 10);
+        if (storedMs === 60000 || storedMs === 300000) setAutoRefreshMs(storedMs);
+    }, []);
+
+    // Auto-refresh: periodically poll the open threads for new posts.
+    useEffect(() => {
+        if (!autoRefresh) return;
+        const id = setInterval(() => { handleRefresh(); }, autoRefreshMs);
+        return () => clearInterval(id);
+    }, [autoRefresh, autoRefreshMs, handleRefresh]);
+
+    const toggleAutoRefresh = useCallback(() => {
+        setAutoRefresh(prev => {
+            const next = !prev;
+            localStorage.setItem('mg-auto-refresh', String(next));
+            return next;
+        });
+    }, []);
+
+    const setAutoRefreshInterval = useCallback((ms: number) => {
+        setAutoRefreshMs(ms);
+        localStorage.setItem('mg-auto-refresh-ms', String(ms));
+    }, []);
 
     useEffect(() => {
         if (!filenameFilterOpen) return;
@@ -324,15 +391,15 @@ function SearchPageContent() {
                     </div>
                 )}
 
-                <Gallery media={filteredMedia} newItemIds={newItemIds} />
+                <Gallery ref={galleryRef} media={filteredMedia} newItemIds={newItemIds} />
 
                 {media.length > 0 && (
-                    <div className="text-center pt-3 pb-6">
+                    <div className="flex flex-col items-center gap-2.5 pt-3 pb-6">
                         <button
                             onClick={handleRefresh}
                             disabled={isRefreshing}
                             className="
-                                flex items-center gap-2 mx-auto px-5 py-2
+                                flex items-center gap-2 px-5 py-2
                                 bg-[var(--bg-surface)] border border-[var(--border)]
                                 text-[var(--text-secondary)] rounded-lg text-sm
                                 transition-all duration-150 disabled:opacity-40 cursor-pointer
@@ -343,29 +410,73 @@ function SearchPageContent() {
                             <RefreshCw size={15} className={isRefreshing ? 'animate-spin' : ''} />
                             {isRefreshing ? 'Checking...' : 'Check for new posts'}
                         </button>
+                        <div className="flex items-center gap-2.5 text-xs text-[var(--text-muted)]">
+                            <label className="flex items-center gap-2 cursor-pointer select-none">
+                                <input
+                                    type="checkbox"
+                                    checked={autoRefresh}
+                                    onChange={toggleAutoRefresh}
+                                    className="peer sr-only"
+                                />
+                                <span className="flex h-4 w-4 items-center justify-center rounded border border-[color:color-mix(in_srgb,var(--border)_70%,white_18%)] bg-[color:color-mix(in_srgb,var(--bg-surface)_82%,white_18%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition-colors peer-checked:border-[var(--accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--accent)]">
+                                    <Check size={11} strokeWidth={3} className={`text-[var(--accent)] transition-opacity ${autoRefresh ? 'opacity-100' : 'opacity-0'}`} />
+                                </span>
+                                <span>Auto-refresh</span>
+                            </label>
+                            {autoRefresh && (
+                                <select
+                                    value={autoRefreshMs}
+                                    onChange={e => setAutoRefreshInterval(Number(e.target.value))}
+                                    className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 text-xs text-[var(--text-secondary)] cursor-pointer focus:border-[var(--accent)] focus:outline-none"
+                                >
+                                    <option value={300000}>5m</option>
+                                    <option value={60000}>1m</option>
+                                </select>
+                            )}
+                        </div>
                     </div>
                 )}
             </main>
 
-            {/* Scroll to top — larger rounded square, fade in/out */}
-            <button
-                onClick={() => { window.scrollTo({ top: 0, behavior: 'smooth' }); setHeaderVisible(true); }}
-                className="
-                    fixed bottom-6 right-6 p-4
-                    bg-[var(--accent)] text-white
-                    rounded-xl shadow-lg z-30
-                    transition-all duration-300 cursor-pointer
-                    hover:brightness-110 hover:scale-105
-                    active:scale-90
-                "
-                style={{
-                    opacity: showScrollTop ? 1 : 0,
-                    pointerEvents: showScrollTop ? 'auto' : 'none',
-                    transform: showScrollTop ? 'translateY(0)' : 'translateY(20px)',
-                }}
-            >
-                <ChevronUp size={24} />
-            </button>
+            {/* Scroll to top / bottom — stacked rounded squares, fade in/out */}
+            <div className="fixed bottom-6 right-6 z-30 flex flex-col gap-3">
+                <button
+                    onClick={() => { window.scrollTo({ top: 0, behavior: 'smooth' }); setHeaderVisible(true); }}
+                    className="
+                        p-4 bg-[var(--accent)] text-white
+                        rounded-xl shadow-lg
+                        transition-all duration-300 cursor-pointer
+                        hover:brightness-110 hover:scale-105
+                        active:scale-90
+                    "
+                    style={{
+                        opacity: showScrollTop ? 1 : 0,
+                        pointerEvents: showScrollTop ? 'auto' : 'none',
+                        transform: showScrollTop ? 'translateY(0)' : 'translateY(20px)',
+                    }}
+                    title="Back to top"
+                >
+                    <ChevronUp size={24} />
+                </button>
+                <button
+                    onClick={() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' })}
+                    className="
+                        p-4 bg-[var(--bg-surface)] border border-[var(--border)] text-[var(--text-secondary)]
+                        rounded-xl shadow-lg
+                        transition-all duration-300 cursor-pointer
+                        hover:border-[var(--accent)] hover:text-[var(--accent)] hover:scale-105
+                        active:scale-90
+                    "
+                    style={{
+                        opacity: showScrollBottom ? 1 : 0,
+                        pointerEvents: showScrollBottom ? 'auto' : 'none',
+                        transform: showScrollBottom ? 'translateY(0)' : 'translateY(20px)',
+                    }}
+                    title="Jump to bottom"
+                >
+                    <ChevronDown size={24} />
+                </button>
+            </div>
 
             {filteredMedia.length > 0 && <TimeScrollbar />}
         </div>

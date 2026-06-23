@@ -99,6 +99,58 @@ input[type="number"] {
     100% { opacity: 0; }
 }
 
+/* ── Download-complete toast (slide in from the right, fade/slide out) ── */
+@keyframes toastIn {
+    from { opacity: 0; transform: translateX(-120%); }
+    to { opacity: 1; transform: translateX(0); }
+}
+@keyframes toastOut {
+    from { opacity: 1; transform: translateX(0); }
+    to { opacity: 0; transform: translateX(-120%); }
+}
+.toast-enter { animation: toastIn 0.28s cubic-bezier(0.22, 1, 0.36, 1); }
+.toast-exit { animation: toastOut 0.3s ease forwards; }
+
+/* ── Locate pulse: briefly ring + glow the tile the user was just viewing in
+   the lightbox, fading out, so they can re-find their place after closing. ── */
+@keyframes locatePulse {
+    0% { box-shadow: 0 0 0 3px var(--accent-cyan), 0 0 22px 6px rgba(20, 209, 255, 0.55); }
+    60% { box-shadow: 0 0 0 3px var(--accent-cyan), 0 0 22px 6px rgba(20, 209, 255, 0.55); }
+    100% { box-shadow: 0 0 0 0 transparent, 0 0 0 0 transparent; }
+}
+.mg-locate {
+    animation: locatePulse 1.8s ease-out forwards;
+    z-index: 1;
+}
+
+/* Full-bleed grey band behind the located tile's row, fading out alongside the
+   tile pulse. Absolutely positioned inside the (relative) grid; sits below the
+   tiles (which are position:relative and come later in the DOM). */
+@keyframes locateBandFade {
+    0%, 55% { opacity: 1; }
+    100% { opacity: 0; }
+}
+.mg-locate-band {
+    position: absolute;
+    left: 50%;
+    width: 100vw;
+    transform: translateX(-50%);
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 3px;
+    pointer-events: none;
+    animation: locateBandFade 1.8s ease-out forwards;
+}
+
+/* ── Live status dot: breathing glow + expanding ring to signal live data ── */
+@keyframes liveDotPulse {
+    0% { box-shadow: 0 0 6px var(--accent-emerald), 0 0 0 0 color-mix(in srgb, var(--accent-emerald) 60%, transparent); }
+    70% { box-shadow: 0 0 6px var(--accent-emerald), 0 0 0 6px color-mix(in srgb, var(--accent-emerald) 0%, transparent); }
+    100% { box-shadow: 0 0 6px var(--accent-emerald), 0 0 0 0 transparent; }
+}
+.mg-live-dot {
+    animation: liveDotPulse 1.8s ease-out infinite;
+}
+
 .animate-pulse {
     animation: pulse 1.5s ease-in-out infinite;
 }

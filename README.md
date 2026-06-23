@@ -13,7 +13,7 @@
 </p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.3.0-E445FF?style=for-the-badge" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.4.0-E445FF?style=for-the-badge" alt="Version">
   <img src="https://img.shields.io/badge/next.js-16-000000?style=for-the-badge&logo=next.js&logoColor=white" alt="Next.js 16">
   <img src="https://img.shields.io/badge/license-MIT-3B82F6?style=for-the-badge" alt="License: MIT">
 </p>
@@ -34,14 +34,14 @@
 ---
 
 > [!NOTE]
-> **v1.3.0.** New this release: a fully redesigned homepage, top navigation, an in-browser **Board Configurator**, a settings panel, a relative-time scrollbar, and a dock-style lightbox thumbnail strip. K-pop-oriented by default, general-purpose by design.
+> **v1.4.0.** New this release: **auto-refresh** with a "new posts" divider that merges in smoothly, download-complete **toasts**, a **locate-on-exit** highlight that returns you to your place after closing the lightbox, fixed webp downloads, always-clockwise rotation, and pulsing live status dots. K-pop-oriented by default, general-purpose by design.
 
 <!-- ───────────────────────────── TOC ───────────────────────────── -->
 <details>
 <summary><b>📖 Table of contents</b></summary>
 
 - [Why 4CHMG2](#-why-4chmg2)
-- [What's new in 1.3.0](#-whats-new-in-130)
+- [What's new in 1.4.0](#-whats-new-in-140)
 - [Features](#-features)
 - [Showcase](#-showcase)
 - [Supported boards](#-supported-boards)
@@ -66,15 +66,15 @@ Imageboards scatter the same media across a dozen boards and archives. Finding e
 | ⚡ | **Fast by default** | A self-hosted proxy with aggressive thumbnail caching keeps scrolling smooth — no skeleton flashes. |
 | 🎛️ | **Yours to configure** | Add, hide, or remove boards right in the browser — no source edits required. |
 
-## 🚀 What's new in 1.3.0
+## 🚀 What's new in 1.4.0
 
-- 🛰️ **Redesigned homepage** — a "deep space utility" command-center aesthetic with a subtle grid background, neon magenta/cyan accents, and feature cards. A live **source-status panel** pings each upstream and shows it as OK or down at a glance.
-- 🧭 **Top navigation** — Explore / Boards tabs, plus About and Settings, always within reach.
-- 🎛️ **In-browser Board Configurator** (`/boards`) — add your own boards to the selection row on the supported sites (4chan, Mokachan, 2ch) by entering a board id + label. Hide or delete boards too — all persisted per-browser, no code changes.
-- ⚙️ **Settings panel** — user preferences such as a default search term, persisted locally.
-- ⏱️ **Relative-time scrollbar** — on search results, a custom right-edge scrollbar shows the relative post time ("3 days ago") of your current position. Drag to scrub through the timeline, or hover the right edge to reveal it.
-- 🔍 **Dock-style thumbnail magnify** — the lightbox thumbnail strip magnifies toward the cursor with smooth proximity falloff.
-- ℹ️ **About modal** — project info and version, now auto-tracked from `package.json`.
+- 🔄 **Auto-refresh** — toggle live polling of your open threads for new posts, with a **1m / 5m** interval (default 5m). Fresh media lands below a full-width **"new posts" divider**; successive batches stack below it and merge into the grid only when you scroll to the bottom — with a smooth slide-in animation instead of a layout jump.
+- 🎯 **Locate-on-exit** — closing the lightbox smooth-scrolls the tile you were viewing back to centre and highlights it (a cyan pulse plus a full-bleed band across its row, fading out) so you never lose your place.
+- ✅ **Download-complete toasts** — green-check "*filename* saved" notifications slide in, stack, and fade out on both the search and lightbox views, tucked out of the way of the thumbnail strip.
+- 💾 **Fixed webp downloads** — webp now saves like every other format instead of opening in a new tab.
+- 🔁 **Always-clockwise rotation** — rotate reads clockwise even after a horizontal flip, and flipping no longer "rewinds" your rotation.
+- 🟢 **Live status dots** — the home-page source-status dots pulse to signal live data.
+- 🧭 **More orienting controls** — a scroll-to-bottom button, mouse-wheel scrolling on the lightbox thumbnail strip, centred-then-cursor-following zoom, and <kbd>Ctrl</kbd>+<kbd>F</kbd> to filter by filename.
 
 ## 🧰 Features
 
@@ -87,7 +87,9 @@ Imageboards scatter the same media across a dozen boards and archives. Finding e
 - [x] **Quick save** — hover a result and press <kbd>S</kbd> to download it in place
 - [x] **Full-featured lightbox** — keyboard nav, zoom/pan, slideshow, flip, rotate, download, hotkeys
 - [x] **OR search** — separate keywords with <kbd>|</kbd> for multi-term matching
-- [x] **Auto-refresh** — load in fresh media without losing your place
+- [x] **Auto-refresh** — toggleable live polling with a "new posts" divider that merges in smoothly when you reach the bottom
+- [x] **Download toasts** — slide-in "saved" confirmations that stack and fade
+- [x] **Locate-on-exit** — smooth-scroll + highlight returns you to your place after closing the lightbox
 - [x] **Touch-friendly** — drag-to-pan, pinch-to-zoom, double-tap reset
 - [x] **Fast self-hosted proxy** — aggressive thumbnail caching for smooth, flash-free scrolling
 - [x] **In-browser Board Configurator** — add / hide / delete boards, persisted per-browser
@@ -106,7 +108,7 @@ Imageboards scatter the same media across a dozen boards and archives. Finding e
     </td>
     <td align="center" width="50%">
       <img src="assets/screenshots/lightbox.webp" alt="Lightbox viewer" width="100%"><br>
-      <sub><b>Lightbox viewer</b> — zoom, pan, slideshow, and a magnifying thumbnail dock.</sub>
+      <sub><b>Lightbox viewer</b> — zoom, pan, slideshow, and a magnifying dock.</sub>
     </td>
   </tr>
 </table>

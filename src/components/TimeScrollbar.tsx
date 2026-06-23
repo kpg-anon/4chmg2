@@ -133,6 +133,13 @@ export default function TimeScrollbar() {
         return () => cancelAnimationFrame(id);
     }, [updateLabel]);
 
+    // Keep the relative-time label fresh on long idle sessions — "2m ago" would
+    // otherwise stay frozen at whatever it read on the last scroll/hover.
+    useEffect(() => {
+        const id = setInterval(updateLabel, 30000);
+        return () => clearInterval(id);
+    }, [updateLabel]);
+
     // Hide the native scrollbar only while this rail is mounted + active.
     useEffect(() => {
         if (!scrollable) return;

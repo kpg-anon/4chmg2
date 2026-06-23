@@ -112,8 +112,8 @@ function StatusDot({ state }: { state: SourceState }) {
     return (
         <span className="flex items-center gap-1 font-mono text-[10px] tracking-wide" style={{ color }}>
             <span
-                className={`h-1.5 w-1.5 rounded-full ${state === 'checking' ? 'animate-pulse' : ''}`}
-                style={{ backgroundColor: color, boxShadow: state === 'ok' ? `0 0 6px ${color}` : undefined }}
+                className={`h-1.5 w-1.5 rounded-full ${state === 'checking' ? 'animate-pulse' : ''} ${state === 'ok' ? 'mg-live-dot' : ''}`}
+                style={{ backgroundColor: color }}
             />
             {label}
         </span>

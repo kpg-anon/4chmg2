@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-06-23
+### Gallery & search UX polish (v1.4.0)
+A polish release focused on smoother, more orienting interactions across search and the lightbox.
+- **Auto-refresh** — a search toggle that periodically polls open threads for new posts, with a **1m / 5m** interval dropdown (default 5m), persisted to localStorage (`mg-auto-refresh`, `mg-auto-refresh-ms`)
+- **"New posts" divider + smooth merge** — fresh items land below a full-width divider line and successive batches accumulate below it (rather than replacing); they merge into the main grid only when you scroll to the bottom. The merge plays a viewport-space FLIP animation (captured at the exact merge instant via an imperative `GalleryHandle.captureMergeStart()`) so thumbnails slide into place instead of jolting
+- **Locate-on-exit** — closing the lightbox smooth-scrolls the last-viewed tile back to centre and highlights it: a cyan ring/glow pulse on the tile plus a full-bleed grey band across its whole row, both fading out (~1.8s), so you keep your place
+- **Download-complete toasts** — green-check "[filename] saved" notifications that slide in, stack, and fade out on both search and lightbox views (portaled above the lightbox); anchored bottom-left and raised above the thumbnail strip while it's docked
+- **webp downloads fixed** — lightbox image saves now download via a blob instead of opening webp in a new tab (browsers ignore `<a download>` for inline-renderable types); videos keep the direct path
+- **Rotation always reads clockwise**, even after a horizontal flip — the underlying `rotate()` stays stable across flip toggles (so flipping only animates the mirror, never a rotation "rewind"); direction is normalized at the rotate step, and the canvas-based transformed download matches the on-screen transform
+- **Scroll-to-bottom button** stacked below the back-to-top button
+- **Thumbnail-strip mouse-wheel scrolling** — the lightbox strip now translates vertical wheel `deltaY` to horizontal scroll (previously only trackpad `deltaX` worked)
+- **Gallery zoom centering** — scroll-zoom stays centred until the media fills the viewport, then follows the cursor
+- **Ctrl/Cmd+F** opens the in-app filename filter instead of the browser find bar
+- **Video download overlay icon** — the results-grid download overlay shows a video icon for videos vs the image icon for images
+- **Live status dots** — the home-page "OK" source-status dots now pulse (steady emerald glow + expanding ring) to signal live data
+- **Time-scrollbar freshness** — the relative-time label re-computes every 30s so it doesn't go stale on long sessions
+
 ## 2026-05-31
 ### Major homepage revamp + settings, board configurator, and time scrollbar (v1.3.0)
 This release is headlined by a **major homepage revamp** that overhauls the landing experience, alongside several new features across search and the gallery.
