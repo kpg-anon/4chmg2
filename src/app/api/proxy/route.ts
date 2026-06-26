@@ -41,6 +41,16 @@ function getContentType(url: string): string {
     return 'application/octet-stream';
 }
 
+// Forces a save dialog regardless of MIME type. Required because Firefox
+// intentionally ignores the client-side <a download> attribute for blob URLs
+// whose type it can render inline (webp, png, jpeg, …) and previews them in a
+// tab instead — only a server-sent Content-Disposition: attachment is honoured.
+// RFC 5987 `filename*` carries unicode; the ASCII `filename` is the fallback.
+function contentDisposition(name: string): string {
+    const ascii = name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+    return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
 function parseRange(rangeHeader: string, totalSize: number): { start: number; end: number } | null {
     const match = rangeHeader.match(/bytes=(\d+)-(\d*)/);
     if (!match) return null;
@@ -76,7 +86,17 @@ export async function GET(request: NextRequest) {
     }
 
     const contentType = getContentType(url);
-    const rangeHeader = request.headers.get('Range');
+
+    // When present, the value is the desired save-as filename. We ignore Range
+    // for downloads and always serve a full 200 with the attachment header:
+    // Firefox sends `Range: bytes=0-` when saving, and a 206 reply (which can't
+    // carry the disposition cleanly) would let it preview the file in a tab
+    // instead — the whole reason webp "downloads" were opening in a new tab.
+    const downloadName = searchParams.get('download');
+    const downloadHeaders: Record<string, string> = downloadName
+        ? { 'Content-Disposition': contentDisposition(downloadName) }
+        : {};
+    const rangeHeader = downloadName ? null : request.headers.get('Range');
 
     // ── Try disk cache first ──
     if (rangeHeader) {
@@ -105,6 +125,7 @@ export async function GET(request: NextRequest) {
                 status: 200,
                 headers: {
                     ...CACHE_HEADERS,
+                    ...downloadHeaders,
                     'Content-Type': contentType,
                     'Content-Length': String(cached.size),
                 },
@@ -140,6 +161,7 @@ export async function GET(request: NextRequest) {
             status: 200,
             headers: {
                 ...CACHE_HEADERS,
+                ...downloadHeaders,
                 'Content-Type': contentType,
                 'Content-Length': String(imageBuffer.length),
             },

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-26
+### New-posts fix (v1.4.1)
+- **New-posts thumbnails no longer flash blank on locate-on-exit** — freshly arrived "new posts" tiles now load eagerly on mount instead of waiting for the lazy-load observer, so they're decoded by the time you open one and exit the lightbox; the locate-on-exit highlight lands on the actual thumbnail rather than a blank tile
+
 ## 2026-06-23
 ### Gallery & search UX polish (v1.4.0)
 A polish release focused on smoother, more orienting interactions across search and the lightbox.
