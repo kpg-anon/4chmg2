@@ -13,7 +13,7 @@
 </p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.4.1-E445FF?style=for-the-badge" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.4.2-E445FF?style=for-the-badge" alt="Version">
   <img src="https://img.shields.io/badge/next.js-16-000000?style=for-the-badge&logo=next.js&logoColor=white" alt="Next.js 16">
   <img src="https://img.shields.io/badge/license-MIT-3B82F6?style=for-the-badge" alt="License: MIT">
 </p>

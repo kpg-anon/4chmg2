@@ -1364,6 +1364,7 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
                     const isSelected = selectedKeys.has(key);
                     const downloadOverlay = downloadOverlays[key];
                     const showNewDivider = index === firstNewIndex && firstNewIndex > 0;
+                    const newTileAnimation = isNew ? 'animate-[fadeIn_0.3s_ease-out]' : '';
                     return (
                         <Fragment key={key}>
                         {showNewDivider && (
@@ -1390,7 +1391,7 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
                             onFocus={() => setHoveredMediaKey(key)}
                             onBlur={() => setHoveredMediaKey(current => current === key ? null : current)}
                             aria-pressed={selectionMode ? isSelected : undefined}
-                            className={`group relative aspect-square bg-[var(--bg-surface)] rounded-lg overflow-hidden border-2 transition-[border-color] duration-150 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-base)] ${isSelected ? 'border-[var(--accent)]' : 'border-[var(--border)] hover:border-[var(--accent)]'} ${isNew ? 'opacity-0 animate-[fadeIn_0.3s_ease-out_forwards]' : ''}`}
+                            className={`group relative aspect-square bg-[var(--bg-surface)] rounded-lg overflow-hidden border-2 transition-[border-color] duration-150 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-base)] ${isSelected ? 'border-[var(--accent)]' : 'border-[var(--border)] hover:border-[var(--accent)]'} ${newTileAnimation}`}
                         >
                             <LazyThumb src={proxyUrl(item.thumbnail)} alt={item.filename} eager={isNew} className="object-cover w-full h-full group-hover:scale-105 group-hover:brightness-[0.85]" style={{ transformOrigin: 'center', opacity: downloadOverlay ? 0.45 : 1 }} />
 

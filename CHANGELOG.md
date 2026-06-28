@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-28
+### New-posts locate highlight root-cause fix (v1.4.2)
+- **Fix blank highlighted thumbnails after closing new-post media** — new auto-refresh tiles no longer rely on an `opacity-0` + `animation-fill-mode: forwards` fade-in state; the locate-on-exit pulse can now run without replacing the fade animation and making the already-loaded thumbnail transparent
+
 ## 2026-06-26
 ### New-posts fix (v1.4.1)
 - **New-posts thumbnails no longer flash blank on locate-on-exit** — freshly arrived "new posts" tiles now load eagerly on mount instead of waiting for the lazy-load observer, so they're decoded by the time you open one and exit the lightbox; the locate-on-exit highlight lands on the actual thumbnail rather than a blank tile
