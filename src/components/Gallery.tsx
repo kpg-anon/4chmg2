@@ -28,7 +28,13 @@ export interface GalleryHandle {
 }
 
 const VIDEO_EXTS = ['.webm', '.mp4'];
-const proxyUrl = (url: string) => `/api/proxy?url=${encodeURIComponent(url)}`;
+
+// `p` is the owning 4chan post number. It costs nothing when the file is still
+// live, but when 4chan has pruned or deleted it the proxy uses the number to
+// look up the exact desuarchive copy (reposts are stored under the tim of
+// whichever upload the archive saw first, so the URL alone isn't enough).
+const proxyUrl = (url: string, item?: MediaItem) =>
+    `/api/proxy?url=${encodeURIComponent(url)}${item?.source === '4chan' ? `&p=${item.id}` : ''}`;
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 2000;
@@ -36,10 +42,20 @@ const DOWNLOAD_OVERLAY_COMPLETE_MS = 650;
 const DOWNLOAD_OVERLAY_ERROR_MS = 1200;
 
 // Thumbnail-strip dock magnify: thumbs grow toward the cursor with a smooth
-// proximity falloff. Capped at +0.25 so a 64px thumb reaches the 80px strip
-// height exactly (center origin) without being clipped by the strip's overflow.
+// proximity falloff. Capped at +0.25 so a 64px thumb reaches exactly the 80px
+// content box (center origin) without being clipped by the strip's overflow —
+// see STRIP_* below for how that box relates to the strip's full height.
 const DOCK_FALLOFF_PX = 120;
 const DOCK_MAX_ADD = 0.25;
+
+// ── Thumbnail strip geometry ──
+// The strip is one 80px content box for the thumbs plus an 8px gutter below it,
+// reserved for the scrollbar rail. Keeping the rail in its own strip of space
+// means a fully magnified thumb (80px, filling the content box) can never
+// collide with it, so neither has to give ground to the other.
+const STRIP_CONTENT_PX = 80;
+const STRIP_GUTTER_PX = 8;
+const STRIP_HEIGHT_REM = `${(STRIP_CONTENT_PX + STRIP_GUTTER_PX) / 16}rem`; // 5.5rem
 
 interface DownloadOverlayState {
     progress: number;
@@ -84,7 +100,7 @@ function getUniqueZipPath(item: MediaItem, usedNames: Map<string, number>): stri
 // reads — and a save click then reuses the warm cache entry rather than
 // re-downloading.
 const downloadHref = (item: MediaItem) =>
-    `${proxyUrl(item.url)}&download=${encodeURIComponent(getDownloadFilename(item))}`;
+    `${proxyUrl(item.url, item)}&download=${encodeURIComponent(getDownloadFilename(item))}`;
 
 function triggerAnchorDownload(href: string, filename: string): void {
     const a = document.createElement('a');
@@ -225,6 +241,166 @@ function LazyThumb({ src, alt, className, style, eager }: { src: string; alt: st
     );
 }
 
+// ── Thumbnail-strip scrollbar ──
+// The strip suppresses its native scrollbar. Firefox reserves layout space for
+// one, and inside the fixed-height strip that reservation pushed the thumbs into
+// vertical overflow — so the strip grew a second, vertical bar and lost visible
+// thumbnail height to a permanent horizontal one. This rail lives in the strip's
+// reserved bottom gutter instead and stays hidden until it's relevant: while the
+// strip is actually scrolling, or while the pointer is down in the gutter where
+// the rail lives and the user is evidently going for it.
+const RAIL_SCROLL_LINGER_MS = 700;
+// Gutter height plus a small approach margin, measured up from the strip's
+// bottom edge. Generous enough to catch a pointer heading for the rail without
+// reaching so far up that ordinary thumbnail browsing summons it.
+const RAIL_REACH_ZONE_PX = STRIP_GUTTER_PX + 8;
+const RAIL_MIN_KNOB_PX = 28;
+
+function StripScrollbar({ hostRef, scrollRef, itemCount, dimmed }: {
+    /** Strip + rail wrapper. Hover is tracked here rather than on the scroller
+     *  so moving the pointer from the thumbs onto the rail isn't a `pointerleave`
+     *  — that fired a hide and pulled the rail out from under the cursor, which
+     *  then re-entered the strip and showed it again, flickering. */
+    hostRef: React.RefObject<HTMLDivElement | null>;
+    scrollRef: React.RefObject<HTMLDivElement | null>;
+    itemCount: number;
+    dimmed: boolean;
+}) {
+    const trackRef = useRef<HTMLDivElement>(null);
+    const knobRef = useRef<HTMLDivElement>(null);
+    const [scrollable, setScrollable] = useState(false);
+    // Visibility is derived from three independent conditions rather than driven
+    // by one shared timer, so the rail can't get stuck shown when they overlap.
+    const [nearRail, setNearRail] = useState(false);
+    const [scrolling, setScrolling] = useState(false);
+    const [dragging, setDragging] = useState(false);
+    const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const dragRef = useRef<{ pointerId: number; startX: number; startScrollLeft: number } | null>(null);
+
+    // Knob geometry is written straight to the DOM: this runs on every scroll
+    // event, and a React state update per frame would fight the strip's own
+    // magnify RAF loop.
+    const measure = useCallback(() => {
+        const el = scrollRef.current;
+        const track = trackRef.current;
+        const knob = knobRef.current;
+        if (!el || !track || !knob) return;
+
+        const trackWidth = track.clientWidth;
+        const overflow = el.scrollWidth - el.clientWidth;
+        const canScroll = overflow > 1 && trackWidth > 0;
+        setScrollable(prev => (prev === canScroll ? prev : canScroll));
+        if (!canScroll) return;
+
+        const width = Math.max(RAIL_MIN_KNOB_PX, (el.clientWidth / el.scrollWidth) * trackWidth);
+        const left = (el.scrollLeft / overflow) * (trackWidth - width);
+        knob.style.width = `${width}px`;
+        knob.style.transform = `translateX(${left}px)`;
+    }, [scrollRef]);
+
+    useEffect(() => {
+        const el = scrollRef.current;
+        const host = hostRef.current;
+        if (!el || !host) return;
+        measure();
+
+        const onScroll = () => {
+            measure();
+            setScrolling(true);
+            if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+            scrollTimerRef.current = setTimeout(() => setScrolling(false), RAIL_SCROLL_LINGER_MS);
+        };
+        const onPointerMove = (e: PointerEvent) => {
+            const rect = host.getBoundingClientRect();
+            setNearRail(rect.bottom - e.clientY <= RAIL_REACH_ZONE_PX);
+        };
+        const onPointerLeave = () => setNearRail(false);
+
+        el.addEventListener('scroll', onScroll, { passive: true });
+        host.addEventListener('pointermove', onPointerMove);
+        host.addEventListener('pointerleave', onPointerLeave);
+        const observer = new ResizeObserver(() => measure());
+        observer.observe(el);
+
+        return () => {
+            el.removeEventListener('scroll', onScroll);
+            host.removeEventListener('pointermove', onPointerMove);
+            host.removeEventListener('pointerleave', onPointerLeave);
+            observer.disconnect();
+            if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+        };
+    }, [scrollRef, hostRef, measure]);
+
+    // Re-measure when the batch grows (auto-refresh merges new posts in).
+    useEffect(() => { measure(); }, [itemCount, measure]);
+
+    const handleKnobDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+        const el = scrollRef.current;
+        if (!el) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        dragRef.current = { pointerId: e.pointerId, startX: e.clientX, startScrollLeft: el.scrollLeft };
+        setDragging(true);
+    }, [scrollRef]);
+
+    const handleKnobMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+        const drag = dragRef.current;
+        const el = scrollRef.current;
+        const track = trackRef.current;
+        const knob = knobRef.current;
+        if (!drag || drag.pointerId !== e.pointerId || !el || !track || !knob) return;
+        const overflow = el.scrollWidth - el.clientWidth;
+        const travel = track.clientWidth - knob.offsetWidth;
+        if (overflow <= 0 || travel <= 0) return;
+        el.scrollLeft = drag.startScrollLeft + ((e.clientX - drag.startX) * overflow) / travel;
+    }, [scrollRef]);
+
+    const handleKnobUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+        const drag = dragRef.current;
+        if (!drag) return;
+        if (e.currentTarget.hasPointerCapture(drag.pointerId)) e.currentTarget.releasePointerCapture(drag.pointerId);
+        dragRef.current = null;
+        setDragging(false);
+    }, []);
+
+    // Clicking the bare track centres the knob there, like a native scrollbar.
+    const handleTrackDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+        const el = scrollRef.current;
+        const knob = knobRef.current;
+        if (!el || !knob) return;
+        const rect = e.currentTarget.getBoundingClientRect();
+        const travel = rect.width - knob.offsetWidth;
+        const overflow = el.scrollWidth - el.clientWidth;
+        if (travel <= 0 || overflow <= 0) return;
+        const offset = Math.min(Math.max(e.clientX - rect.left - knob.offsetWidth / 2, 0), travel);
+        el.scrollTo({ left: (offset / travel) * overflow, behavior: 'smooth' });
+    }, [scrollRef]);
+
+    const shown = scrollable && !dimmed && (nearRail || scrolling || dragging);
+
+    return (
+        // The hit area fills the gutter; the visible rail is inset within it, so
+        // the rail reads as a slim 6px bar but is a comfortable 8px target.
+        <div
+            ref={trackRef}
+            onPointerDown={handleTrackDown}
+            className="absolute bottom-0 left-0 right-0 z-50 transition-opacity duration-200 ease-out"
+            style={{ height: STRIP_GUTTER_PX, opacity: shown ? 1 : 0, pointerEvents: shown ? 'auto' : 'none' }}
+        >
+            <div className="absolute inset-x-0 inset-y-[1px] rounded-full bg-white/10" />
+            <div
+                ref={knobRef}
+                onPointerDown={handleKnobDown}
+                onPointerMove={handleKnobMove}
+                onPointerUp={handleKnobUp}
+                onPointerCancel={handleKnobUp}
+                className="absolute inset-y-[1px] left-0 rounded-full bg-white/40 hover:bg-[var(--accent)] cursor-grab active:cursor-grabbing transition-colors duration-150"
+            />
+        </div>
+    );
+}
+
 function formatSize(bytes: number): string {
     if (!bytes) return '';
     if (bytes < 1024) return `${bytes}B`;
@@ -252,7 +428,7 @@ function useGridPrefetch(media: MediaItem[]) {
     useEffect(() => {
         if (!media.length || typeof window === 'undefined') return;
 
-        const thumbUrls = media.map(m => proxyUrl(m.thumbnail));
+        const thumbUrls = media.map(m => proxyUrl(m.thumbnail, m));
         let cancelled = false;
         let cursor = 0;
         const inflight: HTMLImageElement[] = [];
@@ -354,6 +530,7 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
     const mergePendingRef = useRef(false);
     const flipPrevRef = useRef<Map<string, { top: number; left: number }>>(new Map());
     const thumbnailStripRef = useRef<HTMLDivElement>(null);
+    const thumbDockRef = useRef<HTMLDivElement>(null);
     const dockRafRef = useRef<number | null>(null);
     const dockPointerXRef = useRef(0);
     const dockScaledRef = useRef<Set<number>>(new Set());
@@ -370,6 +547,12 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
         return false;
     });
     const [seekbarValue, setSeekbarValue] = useState(0);
+    // The transport bar only belongs on screen while the pointer is on the
+    // video, so it stops covering the bottom of the frame the rest of the time.
+    // Scrubbing keeps it up even if the drag wanders off the video, which is
+    // easy to do with the seekbar sitting flush against the bottom edge.
+    const [videoHovered, setVideoHovered] = useState(false);
+    const [scrubbing, setScrubbing] = useState(false);
     const seekbarRafRef = useRef<number | null>(null);
     const frameDurationRef = useRef(1 / 30);
     const lastFrameTimeRef = useRef(-1);
@@ -634,6 +817,19 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
         return () => { if (seekbarRafRef.current) cancelAnimationFrame(seekbarRafRef.current); };
     }, [selectedIndex, isVideoPaused]);
 
+    // A scrub can end anywhere — off the video, outside the window — so the
+    // release is tracked globally rather than on the seekbar itself.
+    useEffect(() => {
+        if (!scrubbing) return;
+        const end = () => setScrubbing(false);
+        window.addEventListener('pointerup', end);
+        window.addEventListener('pointercancel', end);
+        return () => {
+            window.removeEventListener('pointerup', end);
+            window.removeEventListener('pointercancel', end);
+        };
+    }, [scrubbing]);
+
     // Measure actual frame duration via requestVideoFrameCallback
     useEffect(() => {
         const video = videoRef.current;
@@ -766,6 +962,10 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
         setMediaLoaded(false);
         setIsVideoPaused(false);
         setSeekbarValue(0);
+        // Navigating swaps the video out from under the pointer without firing a
+        // leave, so hover has to be dropped here rather than left to the DOM.
+        setVideoHovered(false);
+        setScrubbing(false);
         applyTransform();
         requestAnimationFrame(() => {
             if (mediaRotateRef.current) mediaRotateRef.current.style.transition = 'transform 0.15s ease-out';
@@ -796,7 +996,7 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
             const idx: number = (selectedIndex + i) % media.length;
             if (idx === selectedIndex) continue;
             const item = media[idx];
-            const url = proxyUrl(item.url);
+            const url = proxyUrl(item.url, item);
             if (precacheRef.current.has(url)) continue;
             precacheRef.current.add(url);
             const isVideo = VIDEO_EXTS.includes(item.ext);
@@ -835,7 +1035,7 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
         if (!item) return;
         const isVideo = VIDEO_EXTS.includes(item.ext);
         if (isVideo) {
-            if (blobCacheRef.current.has(proxyUrl(item.url))) setMediaLoaded(true);
+            if (blobCacheRef.current.has(proxyUrl(item.url, item))) setMediaLoaded(true);
         } else {
             const img = imgRef.current;
             if (img && img.complete && img.naturalWidth > 0) setMediaLoaded(true);
@@ -858,7 +1058,7 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
     const handlePrev = useCallback(() => { setSelectedIndex(prev => prev === null ? null : (prev - 1 + media.length) % media.length); resetTransform(); }, [media.length, resetTransform]);
     const toggleSlideshow = useCallback(() => setIsPlaying(p => !p), []);
     const toggleFullscreen = useCallback(() => { if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {}); else document.exitFullscreen().catch(() => {}); }, []);
-    const closeLightbox = useCallback(() => { setSelectedIndex(null); setIsPlaying(false); setOverlayVisible(true); }, []);
+    const closeLightbox = useCallback(() => { setSelectedIndex(null); setIsPlaying(false); setOverlayVisible(true); setVideoHovered(false); setScrubbing(false); }, []);
 
     const toggleThumbDocked = useCallback(() => {
         setThumbDocked(d => { const next = !d; localStorage.setItem('mg-thumb-docked', String(next)); return next; });
@@ -999,7 +1199,7 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
         const item = selectedIndex !== null ? media[selectedIndex] : null;
         if (!item) return;
 
-        const itemProxyUrl = proxyUrl(item.url);
+        const itemProxyUrl = proxyUrl(item.url, item);
         const filename = getDownloadFilename(item);
         const isVideo = VIDEO_EXTS.includes(item.ext);
 
@@ -1062,7 +1262,7 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
             return;
         }
 
-        const proxiedUrl = proxyUrl(item.url);
+        const proxiedUrl = proxyUrl(item.url, item);
         setSelectedVideoSrc(blobCacheRef.current.get(proxiedUrl) || proxiedUrl);
     }, [selectedIndex, media]);
 
@@ -1289,6 +1489,11 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
         pointerEvents: overlayVisible ? 'auto' : 'none',
     };
 
+    // Still gated on the lightbox overlay, so parking the cursor on a playing
+    // video fades the controls out with everything else — moving the mouse
+    // brings them back, the same as any other player.
+    const videoControlsVisible = overlayVisible && (videoHovered || scrubbing);
+
 
     return (
         <>
@@ -1393,7 +1598,7 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
                             aria-pressed={selectionMode ? isSelected : undefined}
                             className={`group relative aspect-square bg-[var(--bg-surface)] rounded-lg overflow-hidden border-2 transition-[border-color] duration-150 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-base)] ${isSelected ? 'border-[var(--accent)]' : 'border-[var(--border)] hover:border-[var(--accent)]'} ${newTileAnimation}`}
                         >
-                            <LazyThumb src={proxyUrl(item.thumbnail)} alt={item.filename} eager={isNew} className="object-cover w-full h-full group-hover:scale-105 group-hover:brightness-[0.85]" style={{ transformOrigin: 'center', opacity: downloadOverlay ? 0.45 : 1 }} />
+                            <LazyThumb src={proxyUrl(item.thumbnail, item)} alt={item.filename} eager={isNew} className="object-cover w-full h-full group-hover:scale-105 group-hover:brightness-[0.85]" style={{ transformOrigin: 'center', opacity: downloadOverlay ? 0.45 : 1 }} />
 
                             {selectionMode && (
                                 <span className={`absolute top-1.5 left-1.5 flex h-6 w-6 items-center justify-center rounded-md border transition-all duration-150 ${isSelected ? 'border-[var(--accent)] bg-[var(--accent)] text-white' : 'border-white/30 bg-black/45 text-white/50'}`}>
@@ -1480,7 +1685,16 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
                             onClick={e => e.stopPropagation()}
                         >
                             {VIDEO_EXTS.includes(selectedItem.ext) ? (
-                                <div ref={videoWrapperRef} className="relative flex items-center justify-center">
+                                <div
+                                    ref={videoWrapperRef}
+                                    className="relative flex items-center justify-center"
+                                    // The wrapper is shrink-wrapped to the video (and resized to
+                                    // match when rotated), and the <video> is pointer-events-none,
+                                    // so this is the video's own hit area. The controls sit inside
+                                    // it, so reaching for them is never a leave.
+                                    onPointerEnter={() => setVideoHovered(true)}
+                                    onPointerLeave={() => setVideoHovered(false)}
+                                >
                                     <div ref={mediaRotateRef} style={{ transition: 'transform 0.15s ease-out' }}>
                                         <video ref={videoRef} autoPlay loop={!isPlaying} className={`max-w-[90vw] max-h-[95vh] rounded shadow-2xl pointer-events-none transition-opacity duration-200 block ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`} src={selectedVideoSrc}
                                             onLoadedData={() => setMediaLoaded(true)}
@@ -1493,8 +1707,8 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
                                     </div>
                                     {mediaLoaded && (
                                         <div
-                                            className="absolute bottom-0 left-0 right-0 flex items-center gap-1.5 px-2 h-5 bg-black/60 backdrop-blur-sm rounded-b z-10"
-                                            style={{ ...overlayFadeStyle, pointerEvents: overlayVisible ? 'auto' : 'none' }}
+                                            className="absolute bottom-0 left-0 right-0 flex items-center gap-1.5 px-2 h-5 bg-black/60 backdrop-blur-sm rounded-b z-10 transition-opacity duration-200 ease-out"
+                                            style={{ opacity: videoControlsVisible ? 1 : 0, pointerEvents: videoControlsVisible ? 'auto' : 'none' }}
                                             onClick={e => e.stopPropagation()}
                                             onPointerDown={e => e.stopPropagation()}
                                             onPointerMove={e => e.stopPropagation()}
@@ -1521,6 +1735,7 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
                                                 max={1}
                                                 step={0.001}
                                                 value={seekbarValue}
+                                                onPointerDown={() => setScrubbing(true)}
                                                 onChange={e => {
                                                     const val = parseFloat(e.target.value);
                                                     setSeekbarValue(val);
@@ -1541,7 +1756,7 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
                                 </div>
                             ) : (
                                 <div ref={mediaRotateRef} style={{ transition: 'transform 0.15s ease-out' }}>
-                                    <img ref={imgRef} src={proxyUrl(selectedItem.url)} alt={selectedItem.filename} fetchPriority="high" className={`max-w-[90vw] max-h-[95vh] rounded shadow-2xl object-contain transition-opacity duration-200 ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`} draggable={false}
+                                    <img ref={imgRef} src={proxyUrl(selectedItem.url, selectedItem)} alt={selectedItem.filename} fetchPriority="high" className={`max-w-[90vw] max-h-[95vh] rounded shadow-2xl object-contain transition-opacity duration-200 ${mediaLoaded ? 'opacity-100' : 'opacity-0'}`} draggable={false}
                                         onLoad={e => { const img = e.target as HTMLImageElement; setDimensions({ width: img.naturalWidth, height: img.naturalHeight }); setMediaLoaded(true); }}
                                     />
                                 </div>
@@ -1560,7 +1775,7 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
                         )}
 
                         {/* Media info overlay */}
-                        <div className="absolute bottom-2 right-3 bg-black/70 px-2 py-0.5 rounded text-xs text-white/60 font-mono pointer-events-none z-10 transition-all duration-300" style={{ opacity: overlayVisible ? 1 : 0, transform: overlayVisible && thumbDocked ? 'translateY(-5.5rem)' : 'translateY(0)' }}>
+                        <div className="absolute bottom-2 right-3 bg-black/70 px-2 py-0.5 rounded text-xs text-white/60 font-mono pointer-events-none z-10 transition-all duration-300" style={{ opacity: overlayVisible ? 1 : 0, transform: overlayVisible && thumbDocked ? 'translateY(-6rem)' : 'translateY(0)' }}>
                             {selectedItem.size ? `${formatSize(selectedItem.size)} | ` : ''}{dimensions ? `${dimensions.width}x${dimensions.height}` : '...'}
                         </div>
                     </div>
@@ -1568,7 +1783,7 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
                     {/* Dock toggle — full-width strip, always visible at bottom */}
                     <button
                         className="group/dock absolute bottom-0 left-0 right-0 z-50 h-1.5 flex items-center justify-center bg-[#141418] hover:bg-[#1e1e1e] cursor-pointer transition-all duration-300 ease-in-out"
-                        style={{ transform: thumbDocked ? 'translateY(-5rem)' : 'translateY(0)', opacity: overlayVisible ? 1 : 0, pointerEvents: overlayVisible ? 'auto' : 'none' }}
+                        style={{ transform: thumbDocked ? 'translateY(-5.5rem)' : 'translateY(0)', opacity: overlayVisible ? 1 : 0, pointerEvents: overlayVisible ? 'auto' : 'none' }}
                         onClick={e => { e.stopPropagation(); toggleThumbDocked(); }}
                         title={thumbDocked ? 'Hide thumbnails (T)' : 'Show thumbnails (T)'}
                     >
@@ -1580,7 +1795,7 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
                     {/* Keyboard shortcuts flyout */}
                     <div
                         className="group/kb absolute bottom-2 left-3 z-50"
-                        style={{ transform: thumbDocked ? 'translateY(-5.5rem)' : 'translateY(0)', transition: 'transform 0.3s ease-in-out, opacity 0.3s ease', opacity: overlayVisible ? 1 : 0, pointerEvents: overlayVisible ? 'auto' : 'none' }}
+                        style={{ transform: thumbDocked ? 'translateY(-6rem)' : 'translateY(0)', transition: 'transform 0.3s ease-in-out, opacity 0.3s ease', opacity: overlayVisible ? 1 : 0, pointerEvents: overlayVisible ? 'auto' : 'none' }}
                         onClick={e => e.stopPropagation()}
                     >
                         <div className="w-7 h-7 rounded-lg bg-white/10 flex items-center justify-center text-white/40 text-xs font-bold cursor-default select-none group-hover/kb:bg-white/15 group-hover/kb:text-white/60 transition-all duration-150">K</div>
@@ -1608,11 +1823,15 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
 
                     {/* Thumbnail Strip — absolutely positioned, slides up/down */}
                     <div
+                        ref={thumbDockRef}
                         className="absolute bottom-0 left-0 right-0 z-40 transition-transform duration-300 ease-in-out"
                         style={{ transform: thumbDocked ? 'translateY(0)' : 'translateY(100%)' }}
                         onClick={e => e.stopPropagation()}
                     >
-                        <div ref={thumbnailStripRef} className="h-20 bg-black flex items-center gap-1.5 px-3 overflow-x-auto" style={overlayFadeStyle}
+                        {/* Bottom padding reserves the rail's gutter: `items-center`
+                            then centres the thumbs in the content box above it. */}
+                        <div ref={thumbnailStripRef} className="bg-black flex items-center gap-1.5 px-3 overflow-x-auto overflow-y-hidden scrollbar-hide"
+                            style={{ ...overlayFadeStyle, height: STRIP_HEIGHT_REM, paddingBottom: STRIP_GUTTER_PX }}
                             onPointerMove={handleDockPointerMove}
                             onPointerLeave={resetDockScale}
                             onWheel={e => {
@@ -1629,17 +1848,18 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
                                     <button key={`thumb-${index}`} onClick={() => { setSelectedIndex(index); setIsPlaying(false); resetTransform(); }}
                                         className={`relative h-16 w-16 shrink-0 rounded overflow-hidden border-2 transition-all duration-100 cursor-pointer ${index === selectedIndex ? 'border-[var(--accent)] opacity-100' : 'border-transparent opacity-40 hover:opacity-80'}`}
                                     >
-                                        <LazyThumb src={proxyUrl(item.thumbnail)} alt="" className="object-cover w-full h-full" />
+                                        <LazyThumb src={proxyUrl(item.thumbnail, item)} alt="" className="object-cover w-full h-full" />
                                     </button>
                                 ))}
                         </div>
+                        <StripScrollbar hostRef={thumbDockRef} scrollRef={thumbnailStripRef} itemCount={media.length} dimmed={!overlayVisible} />
                     </div>
                 </div>,
                 portalTarget
             )}
 
             {portalTarget && toasts.length > 0 && createPortal(
-                <div className={`fixed left-4 z-[10000] flex flex-col items-start gap-2 pointer-events-none transition-[bottom] duration-300 ease-out ${selectedIndex !== null && thumbDocked ? 'bottom-24' : 'bottom-4'}`}>
+                <div className={`fixed left-4 z-[10000] flex flex-col items-start gap-2 pointer-events-none transition-[bottom] duration-300 ease-out ${selectedIndex !== null && thumbDocked ? 'bottom-[6.5rem]' : 'bottom-4'}`}>
                     {toasts.map(toast => (
                         <div
                             key={toast.id}

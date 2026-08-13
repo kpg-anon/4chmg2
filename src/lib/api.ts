@@ -160,16 +160,46 @@ interface DvachThreadResponse {
     threads?: Array<{ posts?: DvachPost[] }>;
 }
 
-// Meguca file_type mapping
+// meguca's FileType enum. Verified against live mokachan payloads for the types
+// that actually appear there (0/1/2/3/6/7/13/15/16/20); the rest come from the
+// upstream enum. Getting this right matters twice over: the extension is part
+// of the media URL, and it's how a non-media upload (audio, archive, text) is
+// recognised and dropped. 14 is meguca's NO_FILE and is deliberately absent.
 const MEGUCA_FILE_TYPE_EXT: Record<number, string> = {
     0: '.jpg',
     1: '.png',
     2: '.gif',
     3: '.webm',
-    4: '.mp4',
-    5: '.ogg',
-    14: '.webp',
+    4: '.pdf',
+    5: '.svg',
+    6: '.mp4',
+    7: '.mp3',
+    8: '.ogg',
+    9: '.zip',
+    10: '.7z',
+    11: '.tar.gz',
+    12: '.tar.xz',
+    13: '.flac',
+    15: '.txt',
+    16: '.webp',
+    17: '.rar',
+    18: '.cbz',
+    19: '.cbr',
+    20: '.avif',
 };
+
+// Mokachan and 2ch accept arbitrary uploads — audio (.flac, .mp3, .ogg),
+// archives, PDFs — which the gallery can't render and which have no usable
+// thumbnail. Extraction drops anything outside this list rather than shipping
+// tiles that can only ever fail to load.
+const DISPLAYABLE_EXTS = new Set([
+    '.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.bmp',
+    '.webm', '.mp4', '.m4v', '.mov',
+]);
+
+function isDisplayableMedia(ext: string): boolean {
+    return DISPLAYABLE_EXTS.has(ext.toLowerCase());
+}
 
 function toNumber(value: string | number | undefined): number {
     if (typeof value === 'number') return value;
@@ -510,6 +540,7 @@ function extractMegucaMedia(
     };
     const replies = Array.isArray(thread.posts) ? thread.posts : [];
     const allPosts: MegucaPost[] = [opPost, ...replies];
+    let skipped = 0;
 
     for (const post of allPosts) {
         if (!post.image || !post.image.sha1) continue;
@@ -549,6 +580,11 @@ function extractMegucaMedia(
             }
         }
 
+        if (!isDisplayableMedia(ext)) {
+            skipped++;
+            continue;
+        }
+
         const thumbExt = image.thumb_type === 0 ? '.jpg' : '.webp';
 
         media.push({
@@ -564,6 +600,10 @@ function extractMegucaMedia(
             tim: (post.time || 0) * 1000,
             size: image.size || 0,
         });
+    }
+
+    if (skipped > 0) {
+        console.log(`[API] ${boardKey}/${threadId}: skipped ${skipped} non-media upload(s)`);
     }
 
     return media;
@@ -582,6 +622,7 @@ function extractDvachMedia(
     const response = data as DvachThreadResponse;
     const threadData = response.threads?.[0];
     if (!threadData?.posts) return media;
+    let skipped = 0;
 
     for (const post of threadData.posts) {
         if (!post.files || post.files.length === 0) continue;
@@ -592,6 +633,11 @@ function extractDvachMedia(
 
             const extMatch = file.name.match(/\.\w+$/);
             const ext = extMatch ? extMatch[0] : '.jpg';
+
+            if (!isDisplayableMedia(ext)) {
+                skipped++;
+                continue;
+            }
 
             // Use post.num * 100 + fileIndex for unique id (posts can have multiple files)
             const id = post.files.length > 1 ? post.num * 100 + fi : post.num;
@@ -610,6 +656,10 @@ function extractDvachMedia(
                 size: (file.size || 0) * 1024, // 2ch.org size is in KB
             });
         }
+    }
+
+    if (skipped > 0) {
+        console.log(`[API] ${boardKey}/${threadId}: skipped ${skipped} non-media upload(s)`);
     }
 
     return media;

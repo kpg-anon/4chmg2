@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-08-13
+### Archive fallback, media filtering, and lightbox chrome (v1.5.0)
+- **Dead 4chan media resolves to the archive** — when 4chan has pruned or deleted a file, the proxy transparently serves desuarchive's copy and caches it under the original URL, so a broken tile becomes a one-time lookup instead of a permanent gap. Resolution is two-stage: the archived URL is derived from the 4chan timestamp (no API call), falling back to an exact `/_/api/chan/post/` lookup via a post-number hint the client passes as `&p=`. The lookup is needed because the archive stores one copy per content hash, so a repost's media points at whichever upload it saw first — derivation alone lands about 70% of the time. `/api/warm` resolves the derivable cases during pre-warm
+- **Non-media uploads are dropped from Mokachan and 2ch** — both accept audio, archives, and text (`.flac`, `.mp3`, `.txt`, …) that the gallery can't render and that only ever produced broken tiles; extraction now keeps images and video only
+- **Corrected the meguca file-type map** — verified against live Mokachan payloads. `.flac` was resolving to `.mjpeg`, PDFs claimed `.mp4`, and type 14 was mapped to `.webp` when it's meguca's `NO_FILE`. This also **fixes MP4s posted with a VP9 codec tag**, which were building `.webm` URLs that 404'd
+- **Custom thumbnail-strip scrollbar** — a rounded rail that auto-hides, replacing the native bar. Firefox reserves layout space for its scrollbars, and inside the fixed-height strip that reservation pushed the thumbs into vertical overflow, so the strip grew a second, vertical bar and lost thumbnail height to a permanent horizontal one. The strip now reserves an 8px gutter of its own for the rail, so a fully magnified thumbnail can never collide with it; the rail shows only while scrolling, while the pointer is in the gutter, or mid-drag
+- **Video controls auto-hide** — the lightbox transport bar now appears only while the pointer is over the video (and stays up mid-scrub), instead of sitting over the bottom of the frame the whole time
+- Firefox scrollbars app-wide now match the existing WebKit styling via `scrollbar-width` / `scrollbar-color`
+
 ## 2026-06-28
 ### New-posts locate highlight root-cause fix (v1.4.2)
 - **Fix blank highlighted thumbnails after closing new-post media** — new auto-refresh tiles no longer rely on an `opacity-0` + `animation-fill-mode: forwards` fade-in state; the locate-on-exit pulse can now run without replacing the fade animation and making the already-loaded thumbnail transparent

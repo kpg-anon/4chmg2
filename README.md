@@ -13,7 +13,7 @@
 </p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.4.2-E445FF?style=for-the-badge" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.5.0-E445FF?style=for-the-badge" alt="Version">
   <img src="https://img.shields.io/badge/next.js-16-000000?style=for-the-badge&logo=next.js&logoColor=white" alt="Next.js 16">
   <img src="https://img.shields.io/badge/license-MIT-3B82F6?style=for-the-badge" alt="License: MIT">
 </p>
@@ -34,14 +34,14 @@
 ---
 
 > [!NOTE]
-> **v1.4.0.** New this release: **auto-refresh** with a "new posts" divider that merges in smoothly, download-complete **toasts**, a **locate-on-exit** highlight that returns you to your place after closing the lightbox, fixed webp downloads, always-clockwise rotation, and pulsing live status dots. K-pop-oriented by default, general-purpose by design.
+> **v1.5.0.** New this release: pruned or deleted 4chan media now **falls back to the archive** instead of leaving a broken tile, non-media uploads are **filtered out** of Mokachan and 2ch results, the lightbox thumbnail strip gets a **custom auto-hiding scrollbar**, and the **video controls only appear on hover**. K-pop-oriented by default, general-purpose by design.
 
 <!-- ───────────────────────────── TOC ───────────────────────────── -->
 <details>
 <summary><b>📖 Table of contents</b></summary>
 
 - [Why 4CHMG2](#-why-4chmg2)
-- [What's new in 1.4.0](#-whats-new-in-140)
+- [What's new in 1.5.0](#-whats-new-in-150)
 - [Features](#-features)
 - [Showcase](#-showcase)
 - [Supported boards](#-supported-boards)
@@ -66,15 +66,12 @@ Imageboards scatter the same media across a dozen boards and archives. Finding e
 | ⚡ | **Fast by default** | A self-hosted proxy with aggressive thumbnail caching keeps scrolling smooth — no skeleton flashes. |
 | 🎛️ | **Yours to configure** | Add, hide, or remove boards right in the browser — no source edits required. |
 
-## 🚀 What's new in 1.4.0
+## 🚀 What's new in 1.5.0
 
-- 🔄 **Auto-refresh** — toggle live polling of your open threads for new posts, with a **1m / 5m** interval (default 5m). Fresh media lands below a full-width **"new posts" divider**; successive batches stack below it and merge into the grid only when you scroll to the bottom — with a smooth slide-in animation instead of a layout jump.
-- 🎯 **Locate-on-exit** — closing the lightbox smooth-scrolls the tile you were viewing back to centre and highlights it (a cyan pulse plus a full-bleed band across its row, fading out) so you never lose your place.
-- ✅ **Download-complete toasts** — green-check "*filename* saved" notifications slide in, stack, and fade out on both the search and lightbox views, tucked out of the way of the thumbnail strip.
-- 💾 **Fixed webp downloads** — webp now saves like every other format instead of opening in a new tab.
-- 🔁 **Always-clockwise rotation** — rotate reads clockwise even after a horizontal flip, and flipping no longer "rewinds" your rotation.
-- 🟢 **Live status dots** — the home-page source-status dots pulse to signal live data.
-- 🧭 **More orienting controls** — a scroll-to-bottom button, mouse-wheel scrolling on the lightbox thumbnail strip, centred-then-cursor-following zoom, and <kbd>Ctrl</kbd>+<kbd>F</kbd> to filter by filename.
+- 🗄️ **Archive fallback for dead media** — when 4chan has pruned or deleted a file, the gallery transparently serves Desuarchive's copy instead of showing a broken tile. Resolution is exact, not a guess: a post-number lookup handles reposts, which the archive stores under whichever upload it saw first.
+- 🧹 **No more unplayable tiles** — audio, archives, and text uploads (`.flac`, `.mp3`, `.txt`, …) are filtered out of Mokachan and 2ch results. Fixing how file types are read along the way also repaired MP4s that were previously failing to load.
+- 🎚️ **Custom thumbnail-strip scrollbar** — a slim rounded rail that stays out of the way and appears only while you're scrolling or reaching for it, in a gutter of its own so magnified thumbnails never collide with it. (Firefox's scrollbars had started stealing height from the strip and forcing a second, vertical bar.)
+- 🎬 **Video controls on hover** — the transport bar appears when the pointer is over the video and gets out of the way otherwise, so it no longer covers the bottom of every clip.
 
 ## 🧰 Features
 

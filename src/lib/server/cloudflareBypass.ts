@@ -21,6 +21,17 @@ const httpsAgent = new https.Agent({
 
 const FLARESOLVERR_URL = process.env.FLARESOLVERR_URL || 'http://127.0.0.1:8191/v1';
 
+/**
+ * Upstream responded with a >=400 status. Carries the status so callers can
+ * branch on it — the proxy only falls back to the archive on a 404.
+ */
+export class UpstreamHttpError extends Error {
+    constructor(public readonly status: number, public readonly url: string) {
+        super(`HTTP ${status} for ${url}`);
+        this.name = 'UpstreamHttpError';
+    }
+}
+
 // Per-domain cookie storage so easychan and mokachan don't bleed into each other
 const cookieStore = new Map<string, string[]>();
 let cachedUserAgent = '';
@@ -144,7 +155,7 @@ function fetchDirect(
             res.on('data', (chunk: Buffer) => chunks.push(chunk));
             res.on('end', () => {
                 if (res.statusCode && res.statusCode >= 400) {
-                    reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+                    reject(new UpstreamHttpError(res.statusCode, url));
                 } else {
                     resolve(Buffer.concat(chunks));
                 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { fetchImage } from '@/lib/server/cloudflareBypass';
+import { fetchImage, UpstreamHttpError } from '@/lib/server/cloudflareBypass';
+import { fetchFromDesuarchive } from '@/lib/server/desuFallback';
 import { getCachedMedia, cacheMedia } from '@/lib/server/mediaCache';
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -134,41 +135,56 @@ export async function GET(request: NextRequest) {
     }
 
     // ── Cache miss — fetch from origin ──
+    let imageBuffer: Buffer;
     try {
-        const imageBuffer = await fetchImage(url);
+        imageBuffer = await fetchImage(url);
+    } catch (error: unknown) {
+        // A 404 means 4chan pruned or deleted the file. Desuarchive keeps a copy
+        // of the boards we read, so resolve there and serve the archived bytes
+        // under the original URL — callers never learn the swap happened, and
+        // the disk cache below makes it a one-time cost.
+        const status = error instanceof UpstreamHttpError ? error.status : 0;
+        const archived = status === 404
+            ? await fetchFromDesuarchive(url, searchParams.get('p'))
+            : null;
 
-        // Save to disk cache (fire-and-forget)
-        cacheMedia(url, imageBuffer).catch(() => {});
-
-        // Handle range request on freshly fetched buffer
-        if (rangeHeader) {
-            const range = parseRange(rangeHeader, imageBuffer.length);
-            if (range) {
-                const slice = imageBuffer.subarray(range.start, range.end + 1);
-                return new NextResponse(new Uint8Array(slice), {
-                    status: 206,
-                    headers: {
-                        ...CACHE_HEADERS,
-                        'Content-Type': contentType,
-                        'Content-Length': String(slice.length),
-                        'Content-Range': `bytes ${range.start}-${range.end}/${imageBuffer.length}`,
-                    },
-                });
-            }
+        if (!archived) {
+            const msg = error instanceof Error ? error.message : String(error);
+            console.error('Error proxying image:', msg);
+            return new NextResponse('Error fetching image', { status: status === 404 ? 404 : 500 });
         }
 
-        return new NextResponse(new Uint8Array(imageBuffer), {
-            status: 200,
-            headers: {
-                ...CACHE_HEADERS,
-                ...downloadHeaders,
-                'Content-Type': contentType,
-                'Content-Length': String(imageBuffer.length),
-            },
-        });
-    } catch (error: unknown) {
-        const msg = error instanceof Error ? error.message : String(error);
-        console.error('Error proxying image:', msg);
-        return new NextResponse('Error fetching image', { status: 500 });
+        console.log(`[Image Proxy] 404 recovered from archive: ${url} -> ${archived.source}`);
+        imageBuffer = archived.buffer;
     }
+
+    // Save to disk cache (fire-and-forget)
+    cacheMedia(url, imageBuffer).catch(() => {});
+
+    // Handle range request on freshly fetched buffer
+    if (rangeHeader) {
+        const range = parseRange(rangeHeader, imageBuffer.length);
+        if (range) {
+            const slice = imageBuffer.subarray(range.start, range.end + 1);
+            return new NextResponse(new Uint8Array(slice), {
+                status: 206,
+                headers: {
+                    ...CACHE_HEADERS,
+                    'Content-Type': contentType,
+                    'Content-Length': String(slice.length),
+                    'Content-Range': `bytes ${range.start}-${range.end}/${imageBuffer.length}`,
+                },
+            });
+        }
+    }
+
+    return new NextResponse(new Uint8Array(imageBuffer), {
+        status: 200,
+        headers: {
+            ...CACHE_HEADERS,
+            ...downloadHeaders,
+            'Content-Type': contentType,
+            'Content-Length': String(imageBuffer.length),
+        },
+    });
 }

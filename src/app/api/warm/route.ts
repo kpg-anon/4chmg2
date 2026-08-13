@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { fetchImage } from '@/lib/server/cloudflareBypass';
+import { fetchImage, UpstreamHttpError } from '@/lib/server/cloudflareBypass';
+import { fetchFromDesuarchive } from '@/lib/server/desuFallback';
 import { cacheMedia, isCached } from '@/lib/server/mediaCache';
 
 // Mirror of the proxy route's allowlist. Kept inline so warm and proxy never
@@ -41,7 +42,18 @@ async function warmOne(url: string): Promise<void> {
         const buffer = await fetchImage(url);
         await cacheMedia(url, buffer);
     } catch (e) {
-        // Best-effort; failures here just mean the next proxy request pays the cost.
+        // Pruned/deleted 4chan media resolves to the desuarchive copy, cached
+        // under the original URL exactly as the proxy would. Warm has no post
+        // hint, so only the derivable URLs land here; the rest resolve on first
+        // proxy request. Any other failure is best-effort — the next proxy
+        // request just pays the cost.
+        if (e instanceof UpstreamHttpError && e.status === 404) {
+            const archived = await fetchFromDesuarchive(url);
+            if (archived) {
+                await cacheMedia(url, archived.buffer);
+                return;
+            }
+        }
         const msg = e instanceof Error ? e.message : String(e);
         console.warn(`[Warm] ${url}: ${msg}`);
     } finally {

@@ -45,6 +45,13 @@ body {
 }
 
 /* ── Scrollbar ── */
+/* Firefox ignores ::-webkit-scrollbar and draws its own at the OS default
+   width, reserving layout space for it. Both properties inherit, so setting
+   them at the root brings Firefox in line with the WebKit rules below. */
+html {
+    scrollbar-width: thin;
+    scrollbar-color: #3a3a42 var(--bg-base);
+}
 ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
