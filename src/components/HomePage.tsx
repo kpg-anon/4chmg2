@@ -6,11 +6,16 @@ import SearchForm from '@/components/SearchForm';
 import SiteHeader from '@/components/SiteHeader';
 
 // ── Upstream sources surfaced in the status panel ──
+// `key` matches the site ids returned by /api/status. Favicons are vendored
+// under public/ rather than hotlinked: they are decoration, and routing them
+// through the image proxy previously coupled them to upstream availability —
+// desuarchive answers /favicon.ico with a Cloudflare challenge even while its
+// API is healthy, which is what made the status dot lie in both directions.
 const SOURCES = [
-    { key: '4chan', label: '4chan', favicon: 'https://s.4cdn.org/image/favicon.ico' },
-    { key: 'mokachan', label: 'Mokachan', favicon: 'https://mokachan.cafe/assets/favicons/favicon.ico' },
-    { key: 'dvach', label: '2ch', favicon: 'https://2ch.org/favicon.ico' },
-    { key: 'desuarchive', label: 'Desuarchive', favicon: 'https://desuarchive.org/favicon.ico' },
+    { key: '4ch', label: '4chan', favicon: '/favicons/4chan.ico' },
+    { key: 'mokachan', label: 'Mokachan', favicon: '/favicons/mokachan.ico' },
+    { key: 'dvach', label: '2ch', favicon: '/favicons/dvach.ico' },
+    { key: 'desu', label: 'Desuarchive', favicon: '/favicons/desuarchive.ico' },
 ] as const;
 
 type SourceState = 'checking' | 'ok' | 'down';
@@ -21,8 +26,6 @@ const FEATURES = [
     { icon: Sparkles, title: 'Always Fresh', desc: 'Real-time thread updates and media synchronization', color: 'var(--accent-emerald)' },
     { icon: Heart, title: 'Built for Fans', desc: 'Designed by enthusiasts for the ultimate experience', color: 'var(--accent)' },
 ];
-
-const proxyUrl = (url: string) => `/api/proxy?url=${encodeURIComponent(url)}`;
 
 export default function HomePage() {
     return (
@@ -77,24 +80,41 @@ function SourceStatus() {
 
     useEffect(() => {
         let cancelled = false;
-        const timers: ReturnType<typeof setTimeout>[] = [];
-        SOURCES.forEach(s => {
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 7000);
-            timers.push(timer);
-            fetch(proxyUrl(s.favicon), { signal: ctrl.signal })
-                .then(r => { if (!cancelled) setStatus(prev => ({ ...prev, [s.key]: r.ok ? 'ok' : 'down' })); })
-                .catch(() => { if (!cancelled) setStatus(prev => ({ ...prev, [s.key]: 'down' })); })
-                .finally(() => clearTimeout(timer));
-        });
-        return () => { cancelled = true; timers.forEach(clearTimeout); };
+        const ctrl = new AbortController();
+
+        // One server-side round of probes covers every source; the route
+        // memoises for a minute so refreshes stay cheap for the upstreams.
+        const check = () => {
+            fetch('/api/status', { signal: ctrl.signal, cache: 'no-store' })
+                .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+                .then((states: Record<string, SourceState>) => {
+                    if (cancelled) return;
+                    setStatus(prev => {
+                        const next = { ...prev };
+                        for (const s of SOURCES) next[s.key] = states[s.key] === 'ok' ? 'ok' : 'down';
+                        return next;
+                    });
+                })
+                .catch(() => {
+                    if (cancelled) return;
+                    setStatus(prev => Object.fromEntries(
+                        SOURCES.map(s => [s.key, prev[s.key] === 'checking' ? 'down' : prev[s.key]])
+                    ) as Record<string, SourceState>);
+                });
+        };
+
+        check();
+        // Keep the panel a live readout rather than a page-load snapshot.
+        const interval = setInterval(check, 60_000);
+
+        return () => { cancelled = true; ctrl.abort(); clearInterval(interval); };
     }, []);
 
     return (
         <div className="absolute left-6 top-2 hidden flex-col gap-2.5 lg:flex xl:left-10">
             {SOURCES.map(s => (
                 <div key={s.key} className="flex items-center gap-2 text-xs">
-                    <img src={proxyUrl(s.favicon)} alt="" className="h-3.5 w-3.5 rounded-sm opacity-80" />
+                    <img src={s.favicon} alt="" className="h-3.5 w-3.5 rounded-sm opacity-80" />
                     <span className="text-[var(--text-secondary)]">{s.label}</span>
                     <StatusDot state={status[s.key]} />
                 </div>

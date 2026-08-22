@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-22
+### Source-status probes measure the API, not the favicon (v1.5.1)
+- **Homepage status dots now reflect real reachability** — the panel inferred health by fetching each site's `favicon.ico` through `/api/proxy`, which measured the wrong thing twice over. Desuarchive serves `/favicon.ico` behind a Cloudflare browser challenge (403 to any server-side client) while its API answers normally, and the proxy's disk cache has no TTL — so a favicon fetched once kept reporting "OK" indefinitely after the probe itself began failing. Production showed green off a five-week-old cached file while dev, which never had that entry warmed, showed DOWN; neither reflected whether the source actually worked. A new `/api/status` route `HEAD`s the endpoint each source is genuinely consumed through (catalog JSON for 4chan/Mokachan/2ch, `/_/api/chan/thread/` for the archive), derived from the board configs so the probes can't drift from real traffic
+- **Favicons are served locally** from `public/favicons/` instead of hotlinked through the image proxy — they're decoration, and routing them through the proxy coupled them to upstream availability and the media cache
+- Probe results are memoised process-wide for 60s behind a single-flight guard, so a busy homepage can't burst requests at a source that's already struggling; `HEAD` falls back to `GET` so a 405 can't produce a false DOWN, and the archive is probed via its thread endpoint rather than search, which is rate-limited
+- The panel now re-checks every 60s instead of taking a single page-load snapshot
+
 ## 2026-08-13
 ### Archive fallback, media filtering, and lightbox chrome (v1.5.0)
 - **Dead 4chan media resolves to the archive** — when 4chan has pruned or deleted a file, the proxy transparently serves desuarchive's copy and caches it under the original URL, so a broken tile becomes a one-time lookup instead of a permanent gap. Resolution is two-stage: the archived URL is derived from the 4chan timestamp (no API call), falling back to an exact `/_/api/chan/post/` lookup via a post-number hint the client passes as `&p=`. The lookup is needed because the archive stores one copy per content hash, so a repost's media points at whichever upload it saw first — derivation alone lands about 70% of the time. `/api/warm` resolves the derivable cases during pre-warm
