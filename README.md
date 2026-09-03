@@ -13,7 +13,7 @@
 </p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.5.0-E445FF?style=for-the-badge" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.6.0-E445FF?style=for-the-badge" alt="Version">
   <img src="https://img.shields.io/badge/next.js-16-000000?style=for-the-badge&logo=next.js&logoColor=white" alt="Next.js 16">
   <img src="https://img.shields.io/badge/license-MIT-3B82F6?style=for-the-badge" alt="License: MIT">
 </p>
@@ -34,14 +34,14 @@
 ---
 
 > [!NOTE]
-> **v1.5.0.** New this release: pruned or deleted 4chan media now **falls back to the archive** instead of leaving a broken tile, non-media uploads are **filtered out** of Mokachan and 2ch results, the lightbox thumbnail strip gets a **custom auto-hiding scrollbar**, and the **video controls only appear on hover**. K-pop-oriented by default, general-purpose by design.
+> **v1.6.0.** New this release: archive searches now return **every thread you asked for** instead of quietly dropping the ones the archive rate-limited away — the same query that rendered 786 media items now returns 1692. Results **fill in thread by thread** as they arrive, the thread count is **accurate past 15**, and archive mode swaps live polling for a **"Load more posts"** check that picks up threads archived since you searched. K-pop-oriented by default, general-purpose by design.
 
 <!-- ───────────────────────────── TOC ───────────────────────────── -->
 <details>
 <summary><b>📖 Table of contents</b></summary>
 
 - [Why 4CHMG2](#-why-4chmg2)
-- [What's new in 1.5.0](#-whats-new-in-150)
+- [What's new in 1.6.0](#-whats-new-in-160)
 - [Features](#-features)
 - [Showcase](#-showcase)
 - [Supported boards](#-supported-boards)
@@ -62,16 +62,17 @@ Imageboards scatter the same media across a dozen boards and archives. Finding e
 | | Principle | What it means |
 |:--:|:--|:--|
 | 🔎 | **Search once, see everything** | One keyword fans out across 4chan, 2ch.org, Mokachan, and Desuarchive in parallel. |
-| 🖼️ | **One unified gallery** | All hits merge into a single grid, sorted newest-first by post timestamp. |
+| 🖼️ | **One unified gallery** | All hits merge into a single grid, ordered by post timestamp with the newest at the bottom. |
 | ⚡ | **Fast by default** | A self-hosted proxy with aggressive thumbnail caching keeps scrolling smooth — no skeleton flashes. |
 | 🎛️ | **Yours to configure** | Add, hide, or remove boards right in the browser — no source edits required. |
 
-## 🚀 What's new in 1.5.0
+## 🚀 What's new in 1.6.0
 
-- 🗄️ **Archive fallback for dead media** — when 4chan has pruned or deleted a file, the gallery transparently serves Desuarchive's copy instead of showing a broken tile. Resolution is exact, not a guess: a post-number lookup handles reposts, which the archive stores under whichever upload it saw first.
-- 🧹 **No more unplayable tiles** — audio, archives, and text uploads (`.flac`, `.mp3`, `.txt`, …) are filtered out of Mokachan and 2ch results. Fixing how file types are read along the way also repaired MP4s that were previously failing to load.
-- 🎚️ **Custom thumbnail-strip scrollbar** — a slim rounded rail that stays out of the way and appears only while you're scrolling or reaching for it, in a gutter of its own so magnified thumbnails never collide with it. (Firefox's scrollbars had started stealing height from the strip and forcing a second, vertical bar.)
-- 🎬 **Video controls on hover** — the transport bar appears when the pointer is over the video and gets out of the way otherwise, so it no longer covers the bottom of every clip.
+- 🗄️ **Archive searches return the whole result set** — opening every thread at once made the archive rate-limit the batch, and each rejected fetch was silently treated as a thread with no media. Half your results could disappear with nothing to indicate it: the same `/trash/` search at 11 threads rendered **786 media items where it should have rendered 1692**. Archive requests now share one queue that paces and retries them, so a wide batch takes a few seconds longer instead of arriving half-empty.
+- ⏳ **Results fill in as they arrive** — media appears thread by thread with a running `Loading 4/11 threads` count, rather than waiting on the slowest fetch. A thread that genuinely can't be loaded is now reported instead of vanishing.
+- 🔢 **Thread counts above ~15 are honoured** — archive search read only the first page of results and then discarded threads still live on 4chan, so asking for 30 quietly gave you fewer. It now pages until it has what you asked for.
+- 🕑 **"Load more posts" in archive mode** — archived threads are dead, so polling them for new posts is pointless and auto-refresh is hidden. The button instead catches the one thing that can change while you're reading: a thread that was still live when you searched has since been archived. It appends at the bottom, where it belongs chronologically, and a toast tells you either what arrived or that there's nothing new.
+- 📌 **Your place in the grid is kept** — threads land in time order, so a late arrival can slot in above what you're looking at. Inserts are compensated for against the tile you're reading, and the grid opts out of the browser's own scroll anchoring so the two corrections can't stack and send the view lurching.
 
 ## 🧰 Features
 
