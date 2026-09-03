@@ -70,14 +70,6 @@ Imageboards scatter the same media across a dozen boards and archives. Finding e
 
 - 🔄 **Auto-refresh follows generals across rollovers** — a search left open used to go quiet on every board but one. Refresh re-polled only the threads that existed when you searched, so the moment a general was replaced by its successor that board stopped updating for good, while a board sitting on one long-lived general kept going. Refresh now notices when a thread is done — 4chan's bump and image limits, a locked Mokachan thread, a closed 2ch thread, or a deleted one — and only then goes looking for the replacement, so a busy board keeps up without a quiet one costing any extra requests.
 
-### Also in 1.6.0
-
-- 🗄️ **Archive searches return the whole result set** — opening every thread at once made the archive rate-limit the batch, and each rejected fetch was silently treated as a thread with no media. Half your results could disappear with nothing to indicate it: the same `/trash/` search at 11 threads rendered **786 media items where it should have rendered 1692**. Archive requests now share one queue that paces and retries them, so a wide batch takes a few seconds longer instead of arriving half-empty.
-- ⏳ **Results fill in as they arrive** — media appears thread by thread with a running `Loading 4/11 threads` count, rather than waiting on the slowest fetch. A thread that genuinely can't be loaded is now reported instead of vanishing.
-- 🔢 **Thread counts above ~15 are honoured** — archive search read only the first page of results and then discarded threads still live on 4chan, so asking for 30 quietly gave you fewer. It now pages until it has what you asked for.
-- 🕑 **"Load more posts" in archive mode** — archived threads are dead, so polling them for new posts is pointless and auto-refresh is hidden. The button instead catches the one thing that can change while you're reading: a thread that was still live when you searched has since been archived. It appends at the bottom, where it belongs chronologically, and a toast tells you either what arrived or that there's nothing new.
-- 📌 **Your place in the grid is kept** — threads land in time order, so a late arrival can slot in above what you're looking at. Inserts are compensated for against the tile you're reading, and the grid opts out of the browser's own scroll anchoring so the two corrections can't stack and send the view lurching.
-
 ## 🧰 Features
 
 <details open>
