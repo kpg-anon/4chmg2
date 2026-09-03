@@ -225,6 +225,12 @@ async function fetchCatalog(boardKey: string): Promise<unknown | null> {
     }
 }
 
+// How many extra archive hits to pull past what the page needs, to absorb the
+// threads that get dropped for still being live on 4chan.
+const ARCHIVE_LIVE_BUFFER = 8;
+const ARCHIVE_WIDEN_STEP = 25;
+const ARCHIVE_WIDEN_ROUNDS = 4;
+
 // Search Threads
 export async function searchThreads(
     boardKeys: string[],
@@ -245,8 +251,6 @@ export async function searchThreads(
         // Desuarchive uses its own search API, not catalog
         // Filter out threads still active on 4chan
         if (config.source === 'desuarchive') {
-            const desuMatches = await searchDesuarchive(boardKey, keywords, megucaThreadCount + 10);
-
             const fourchanKey = `4ch:${config.id}`;
             const catalog = await fetchCatalog(fourchanKey);
             const activeIds = new Set<number>();
@@ -259,12 +263,29 @@ export async function searchThreads(
                 }
             }
 
-            const filtered = desuMatches
-                .filter(m => !activeIds.has(m.threadId))
-                .slice(0, megucaThreadCount);
+            // Live threads are removed *after* the archive returns its hits, so
+            // asking for exactly what the page needs can come up short. Widen the
+            // request until enough archived threads survive the filter (or the
+            // archive runs out) rather than silently returning fewer than N.
+            const need = megucaThreadCount;
+            let want = need + ARCHIVE_LIVE_BUFFER;
+            let archivedMatches: ThreadMatch[] = [];
+            let exhausted = false;
+            let found = 0;
 
-            allMatches.push(...filtered);
-            console.log(`[Search] Desuarchive /${config.id}/: ${desuMatches.length} found, ${activeIds.size} active on 4chan, ${filtered.length} archived returned`);
+            for (let round = 0; round < ARCHIVE_WIDEN_ROUNDS; round++) {
+                const result = await searchDesuarchive(boardKey, keywords, want);
+                exhausted = result.exhausted;
+                found = result.threads.length;
+                archivedMatches = result.threads.filter(m => !activeIds.has(m.threadId));
+                if (archivedMatches.length > need || exhausted) break;
+                want += ARCHIVE_WIDEN_STEP;
+            }
+
+            const selected = archivedMatches.slice(0, megucaThreadCount);
+            allMatches.push(...selected);
+
+            console.log(`[Search] Desuarchive /${config.id}/: ${found} found, ${activeIds.size} active on 4chan, ${archivedMatches.length} archived, returning ${selected.length}`);
             continue;
         }
 
@@ -390,14 +411,20 @@ export async function searchThreads(
     return allMatches;
 }
 
+export interface DesuarchiveSearchPage {
+    threads: ThreadMatch[];
+    /** The archive had no further results past these — don't ask for more. */
+    exhausted: boolean;
+}
+
 // Desuarchive Search
 export async function searchDesuarchive(
     boardKey: string,
     keywords: string[],
     threadCount: number = 5,
-): Promise<ThreadMatch[]> {
+): Promise<DesuarchiveSearchPage> {
     const config = getBoardByKey(boardKey);
-    if (!config || config.source !== 'desuarchive') return [];
+    if (!config || config.source !== 'desuarchive') return { threads: [], exhausted: true };
 
     const query = keywords.join(' ');
     const field = config.searchField === 'comment' ? 'comment' : 'subject';
@@ -409,21 +436,31 @@ export async function searchDesuarchive(
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         const threads: unknown = await response.json();
-        if (!Array.isArray(threads)) return [];
+        if (!Array.isArray(threads)) return { threads: [], exhausted: true };
 
-        return (threads as DesuarchiveSearchResult[]).map(thread => ({
-            boardKey,
-            threadId: thread.no,
-            subject: thread.sub,
-            comment: thread.com,
-        }));
+        return {
+            threads: (threads as DesuarchiveSearchResult[]).map(thread => ({
+                boardKey,
+                threadId: thread.no,
+                subject: thread.sub,
+                comment: thread.com,
+            })),
+            exhausted: response.headers.get('X-Desu-Exhausted') === '1',
+        };
     } catch (error) {
         console.error(`[API] Error searching desuarchive ${boardKey}:`, error);
-        return [];
+        // A failed search isn't proof the archive is out of results, but there's
+        // nothing to page past either.
+        return { threads: [], exhausted: true };
     }
 }
 
 // Thread Media Extraction
+//
+// Throws when the thread can't be fetched. It used to swallow the error and
+// return an empty list, which made a rate-limited archive batch indistinguishable
+// from a thread that genuinely has no media — the gallery just rendered fewer
+// items with no indication anything was missing.
 export async function getThreadMedia(boardKey: string, threadId: number): Promise<MediaItem[]> {
     const cacheKey = `thread:${boardKey}:${threadId}`;
     const cached = getCached<MediaItem[]>(cacheKey);
@@ -431,8 +468,7 @@ export async function getThreadMedia(boardKey: string, threadId: number): Promis
 
     const config = getBoardByKey(boardKey);
     if (!config) {
-        console.error(`[API] Unknown board key: ${boardKey}`);
-        return [];
+        throw new Error(`Unknown board key: ${boardKey}`);
     }
 
     try {
@@ -465,8 +501,45 @@ export async function getThreadMedia(boardKey: string, threadId: number): Promis
         return media;
     } catch (error) {
         console.error(`[API] Error fetching thread ${boardKey}/${threadId}:`, error);
-        return [];
+        throw error;
     }
+}
+
+/**
+ * Fetch several threads' media with a bounded number of requests in flight,
+ * reporting each thread as it lands.
+ *
+ * Threads are visited in the order given and results are streamed back so the
+ * gallery can fill in progressively instead of waiting on the slowest fetch.
+ * Concurrency is capped because the archive answers 429 to wide bursts; the
+ * server-side limiter queues and retries, and this keeps that queue short enough
+ * that a batch doesn't sit behind a long backoff chain.
+ */
+export const THREAD_FETCH_CONCURRENCY = 3;
+
+export async function fetchThreadMediaStream(
+    threads: ThreadMatch[],
+    onThread: (result: { thread: ThreadMatch; media: MediaItem[]; ok: boolean }) => void,
+    signal?: { cancelled: boolean },
+): Promise<void> {
+    let cursor = 0;
+
+    const worker = async () => {
+        while (cursor < threads.length) {
+            if (signal?.cancelled) return;
+            const thread = threads[cursor++];
+            try {
+                const media = await getThreadMedia(thread.boardKey, thread.threadId);
+                if (!signal?.cancelled) onThread({ thread, media, ok: true });
+            } catch {
+                if (!signal?.cancelled) onThread({ thread, media: [], ok: false });
+            }
+        }
+    };
+
+    await Promise.all(
+        Array.from({ length: Math.min(THREAD_FETCH_CONCURRENCY, threads.length) }, worker)
+    );
 }
 
 function extractDesuarchiveMedia(

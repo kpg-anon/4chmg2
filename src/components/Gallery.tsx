@@ -425,10 +425,25 @@ const PREFETCH_CONCURRENCY = 6;
 const WARM_BATCH = 200;
 
 function useGridPrefetch(media: MediaItem[]) {
-    useEffect(() => {
-        if (!media.length || typeof window === 'undefined') return;
+    // Which thumbnails this session has already queued. The batch now grows
+    // incrementally — a search fills in thread by thread, and archive paging
+    // prepends more — so without this every arrival would re-prefetch and
+    // re-warm the entire gallery from scratch.
+    const queuedRef = useRef<Set<string>>(new Set());
 
-        const thumbUrls = media.map(m => proxyUrl(m.thumbnail, m));
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (!media.length) {
+            // A new search cleared the grid; nothing queued is worth remembering.
+            queuedRef.current.clear();
+            return;
+        }
+
+        const fresh = media.filter(m => !queuedRef.current.has(m.thumbnail));
+        if (fresh.length === 0) return;
+        for (const m of fresh) queuedRef.current.add(m.thumbnail);
+
+        const thumbUrls = fresh.map(m => proxyUrl(m.thumbnail, m));
         let cancelled = false;
         let cursor = 0;
         const inflight: HTMLImageElement[] = [];
@@ -463,7 +478,7 @@ function useGridPrefetch(media: MediaItem[]) {
         // every thumbnail in the batch. Idempotent (skips already-cached URLs)
         // and runs concurrently with the client prefetch — first user pays
         // the upstream cost once, every subsequent user gets disk-cache hits.
-        const rawUrls = media.map(m => m.thumbnail);
+        const rawUrls = fresh.map(m => m.thumbnail);
         for (let i = 0; i < rawUrls.length; i += WARM_BATCH) {
             const chunk = rawUrls.slice(i, i + WARM_BATCH);
             fetch('/api/warm', {
@@ -1553,7 +1568,7 @@ const Gallery = forwardRef<GalleryHandle, GalleryProps>(function Gallery({ media
                 </div>
             )}
 
-            <div ref={gridRef} className="relative grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 pb-4">
+            <div ref={gridRef} className="mg-grid relative grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 pb-4">
                 {locateBand && (
                     <div
                         key={locateBand.key}

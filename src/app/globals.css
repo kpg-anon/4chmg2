@@ -118,6 +118,27 @@ input[type="number"] {
 .toast-enter { animation: toastIn 0.28s cubic-bezier(0.22, 1, 0.36, 1); }
 .toast-exit { animation: toastOut 0.3s ease forwards; }
 
+/* Archive paging inserts whole pages of older tiles above what's on screen, and
+   the search page compensates for that explicitly against a chosen anchor tile.
+   The browser's own scroll anchoring picks a different node and adjusts too, so
+   with both running the two corrections stack and the viewport lurches around
+   the grid as each thread lands. Ours is the one that knows about paging. */
+.mg-grid { overflow-anchor: none; }
+
+/* ── Archive-paging toast (drops down from the header, retracts upward) ──
+   Anchored to the top because that's the direction older archive pages arrive
+   from; the motion points at where the new content went. ── */
+@keyframes dropToastIn {
+    from { opacity: 0; transform: translateY(-140%); }
+    to { opacity: 1; transform: translateY(0); }
+}
+@keyframes dropToastOut {
+    from { opacity: 1; transform: translateY(0); }
+    to { opacity: 0; transform: translateY(-140%); }
+}
+.drop-toast-enter { animation: dropToastIn 0.32s cubic-bezier(0.22, 1, 0.36, 1); }
+.drop-toast-exit { animation: dropToastOut 0.3s ease forwards; }
+
 /* ── Locate pulse: briefly ring + glow the tile the user was just viewing in
    the lightbox, fading out, so they can re-find their place after closing. ── */
 @keyframes locatePulse {

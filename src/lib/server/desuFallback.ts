@@ -1,5 +1,5 @@
-import axios from 'axios';
 import { fetchImage } from '@/lib/server/cloudflareBypass';
+import { desuGet } from '@/lib/server/desuLimiter';
 
 /**
  * Recover 4chan media that the CDN no longer serves.
@@ -12,7 +12,6 @@ import { fetchImage } from '@/lib/server/cloudflareBypass';
 
 const DESU_CDN = 'https://desu-usergeneratedcontent.xyz';
 const DESU_API = 'https://desuarchive.org/_/api/chan/post/';
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 // https://i.4cdn.org/<board>/<tim>.<ext>  — full media
 // https://i.4cdn.org/<board>/<tim>s.jpg   — thumbnail
@@ -56,9 +55,12 @@ function derivedUrl(ref: FourchanMediaRef): string {
 /** Exact resolution via the archive's post record — handles reposts/dedup. */
 async function lookupArchivedUrl(ref: FourchanMediaRef, postNum: string): Promise<string | null> {
     try {
-        const { data } = await axios.get<DesuPostResponse>(
+        // Shares the archive's rate-limit budget with search and thread fetches:
+        // a grid full of dead 4chan tiles would otherwise burst hundreds of post
+        // lookups and starve whatever search is running.
+        const data = await desuGet<DesuPostResponse>(
             `${DESU_API}?board=${ref.board}&num=${postNum}`,
-            { headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' }, timeout: 15_000 },
+            { timeout: 15_000 },
         );
         const media = data?.media;
         if (!media) return null;

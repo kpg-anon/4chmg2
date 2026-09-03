@@ -2,13 +2,39 @@
 
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
-import { Check, ChevronUp, ChevronDown, RefreshCw, Funnel, SlidersHorizontal, X } from 'lucide-react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, Suspense } from 'react';
+import { Check, ChevronUp, ChevronDown, RefreshCw, Funnel, SlidersHorizontal, X, History } from 'lucide-react';
 import { parseBoardKeys } from '@/lib/boards';
-import { searchThreads, getThreadMedia, type MediaItem, type ThreadMatch } from '@/lib/api';
+import { searchThreads, fetchThreadMediaStream, type MediaItem, type ThreadMatch } from '@/lib/api';
 import SearchForm from '@/components/SearchForm';
 import Gallery, { type GalleryHandle } from '@/components/Gallery';
 import TimeScrollbar from '@/components/TimeScrollbar';
+
+/** Tiles carry `data-mkey`, so a specific item can be re-found across renders. */
+const tileFor = (mkey: string) =>
+    document.querySelector<HTMLElement>(`[data-mkey="${CSS.escape(mkey)}"]`);
+
+/**
+ * The topmost tile still on screen, plus where it sits. Threads stream in one at
+ * a time and are merged in time order, so a thread that lands late can insert
+ * *above* what the reader is looking at; re-finding this tile afterwards is what
+ * lets the page put it back where it was instead of shoving the grid down.
+ */
+function captureScrollAnchor(): { mkey: string; top: number } | null {
+    if (window.scrollY <= 0) return null;
+    const tiles = document.querySelectorAll<HTMLElement>('[data-mkey]');
+    for (const tile of tiles) {
+        const rect = tile.getBoundingClientRect();
+        if (rect.bottom > 0 && tile.dataset.mkey) {
+            return { mkey: tile.dataset.mkey, top: rect.top };
+        }
+    }
+    return null;
+}
+
+const summarize = (threads: number, items: number, failed: number) =>
+    `${threads} thread${threads === 1 ? '' : 's'} | ${items} media items` +
+    (failed > 0 ? ` (${failed} thread${failed === 1 ? '' : 's'} unavailable)` : '');
 
 function SearchPageContent() {
     const searchParams = useSearchParams();
@@ -22,8 +48,8 @@ function SearchPageContent() {
     const [media, setMedia] = useState<MediaItem[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [isRefreshing, setIsRefreshing] = useState(false);
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [status, setStatus] = useState('');
-    const [threadCount, setThreadCount] = useState(0);
     const [showScrollTop, setShowScrollTop] = useState(false);
     const [showScrollBottom, setShowScrollBottom] = useState(false);
     const [autoRefresh, setAutoRefresh] = useState(false);
@@ -38,6 +64,19 @@ function SearchPageContent() {
     const didFetchRef = useRef('');
     const fetchedThreadsRef = useRef<ThreadMatch[]>([]);
     const knownMediaIdsRef = useRef(new Set<string>());
+    // Media is merged incrementally from a ref rather than from `media` state so
+    // successive thread arrivals don't race each other's setState.
+    const mediaRef = useRef<MediaItem[]>([]);
+    const loadedThreadsRef = useRef(0);
+    const failedThreadsRef = useRef(0);
+    // Abandoned when the search key changes, so a slow in-flight batch can't
+    // write results into the next search.
+    const runTokenRef = useRef({ cancelled: false });
+    const scrollAnchorRef = useRef<{ mkey: string; top: number } | null>(null);
+    // Result of the last "Load more posts", announced as a toast — most often
+    // "nothing new", which otherwise leaves the click with no visible effect.
+    const [pageToast, setPageToast] = useState<{ text: string; jumpTo: string | null; key: number; exiting: boolean } | null>(null);
+    const pageToastTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
     const [newItemIds, setNewItemIds] = useState<Set<string>>(new Set());
     const lastScrollYRef = useRef(0);
     const filenameFilterRef = useRef<HTMLDivElement>(null);
@@ -49,25 +88,95 @@ function SearchPageContent() {
     const keywords = queryParam.split('|').filter(Boolean);
     const megucaThreadCount = parseInt(threadsParam, 10) || 1;
 
+    const showPageToast = useCallback((text: string, jumpTo: string | null) => {
+        pageToastTimersRef.current.forEach(clearTimeout);
+        const key = Date.now();
+        setPageToast({ text, jumpTo, key, exiting: false });
+        pageToastTimersRef.current = [
+            setTimeout(() => setPageToast(prev => (prev && prev.key === key ? { ...prev, exiting: true } : prev)), 4200),
+            setTimeout(() => setPageToast(prev => (prev && prev.key === key ? null : prev)), 4550),
+        ];
+    }, []);
+
+    useEffect(() => {
+        const timers = pageToastTimersRef;
+        return () => { timers.current.forEach(clearTimeout); };
+    }, []);
+
+    // Merge one thread's media into the batch, keeping it in ascending time
+    // order, and hold the reader's position if the insert landed above the fold.
+    const ingestMedia = useCallback((items: MediaItem[]) => {
+        if (items.length === 0) return;
+        scrollAnchorRef.current = captureScrollAnchor();
+        const merged = [...mediaRef.current, ...items].sort((a, b) => a.tim - b.tim);
+        mediaRef.current = merged;
+        for (const m of items) knownMediaIdsRef.current.add(`${m.boardKey}-${m.id}`);
+        setMedia(merged);
+    }, []);
+
+    // Fetch a set of threads a few at a time, rendering each as it lands. The
+    // archive rate-limits wide bursts, so this is what turns "half the threads
+    // silently vanished" into "the batch fills in over a few more seconds".
+    const loadThreadBatch = useCallback(async (
+        threads: ThreadMatch[],
+        token: { cancelled: boolean },
+    ) => {
+        let done = 0;
+        // Tracked via an object so the closure's writes are visible to the caller.
+        const earliest = { mkey: null as string | null, tim: Number.POSITIVE_INFINITY };
+
+        await fetchThreadMediaStream(threads, ({ media: items, ok }) => {
+            done++;
+            if (ok) loadedThreadsRef.current++;
+            else failedThreadsRef.current++;
+
+            for (const m of items) {
+                if (m.tim < earliest.tim) {
+                    earliest.tim = m.tim;
+                    earliest.mkey = `${m.boardKey}-${m.id}`;
+                }
+            }
+
+            ingestMedia(items);
+            if (token.cancelled) return;
+
+            setStatus(done < threads.length
+                ? `Loading ${done}/${threads.length} threads | ${mediaRef.current.length} media items`
+                : summarize(loadedThreadsRef.current, mediaRef.current.length, failedThreadsRef.current));
+        }, token);
+
+        return earliest.mkey;
+    }, [ingestMedia]);
+
     // ── Initial search ──
     useEffect(() => {
         if (didFetchRef.current === searchKey) return;
         didFetchRef.current = searchKey;
 
+        runTokenRef.current.cancelled = true;
+        const token = { cancelled: false };
+        runTokenRef.current = token;
+
         const run = async () => {
             setIsLoading(true);
             setMedia([]);
+            mediaRef.current = [];
             setNewItemIds(new Set());
             knownMediaIdsRef.current = new Set<string>();
             setFilenameFilter('');
             setFilenameRegex(false);
             setFilenameFilterOpen(false);
             fetchedThreadsRef.current = [];
-            setThreadCount(0);
+            loadedThreadsRef.current = 0;
+            failedThreadsRef.current = 0;
+            setPageToast(null);
             setStatus('Searching...');
 
             try {
-                const matches = await searchThreads(boardKeys, keywords, megucaThreadCount, archivedParam);
+                const matches = await searchThreads(
+                    boardKeys, keywords, megucaThreadCount, archivedParam
+                );
+                if (token.cancelled) return;
 
                 if (matches.length === 0) {
                     setStatus('No matching threads found.');
@@ -76,33 +185,71 @@ function SearchPageContent() {
                 }
 
                 fetchedThreadsRef.current = matches;
-                setThreadCount(matches.length);
                 setStatus(`Found ${matches.length} threads. Fetching media...`);
 
-                const results = await Promise.all(
-                    matches.map(t => getThreadMedia(t.boardKey, t.threadId))
-                );
+                // Oldest first, so each thread's media appends below the last
+                // instead of pushing the grid down as the batch fills in.
+                await loadThreadBatch([...matches].reverse(), token);
+                if (token.cancelled) return;
 
-                const allMedia: MediaItem[] = [];
-                for (const items of results) allMedia.push(...items);
-                allMedia.sort((a, b) => a.tim - b.tim);
-                for (const m of allMedia) knownMediaIdsRef.current.add(`${m.boardKey}-${m.id}`);
-
-                setMedia(allMedia);
-                setStatus(allMedia.length
-                    ? `${matches.length} threads | ${allMedia.length} media items`
-                    : 'No media found.'
-                );
+                if (mediaRef.current.length === 0) setStatus('No media found.');
             } catch (error) {
                 console.error('[Search] Error:', error);
-                setStatus('Error occurred while fetching data.');
+                if (!token.cancelled) setStatus('Error occurred while fetching data.');
             } finally {
-                setIsLoading(false);
+                if (!token.cancelled) setIsLoading(false);
             }
         };
 
         run();
     }, [searchKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // ── Load more (archive mode): pick up threads archived since the search ──
+    // Not a "next page" — the N threads asked for are the whole result set. This
+    // covers the one way that set can change while the page is open: a thread
+    // that was still live on 4chan when the search ran (and so was excluded)
+    // drops off the catalog and gets archived. Re-running the same search
+    // surfaces it, and being the newest thread its media appends at the bottom,
+    // right where the button is. Nothing already on screen moves.
+    const handleLoadMore = useCallback(async () => {
+        if (isLoadingMore || isLoading) return;
+        const token = runTokenRef.current;
+        setIsLoadingMore(true);
+        setStatus('Checking for newly archived threads...');
+
+        try {
+            const matches = await searchThreads(boardKeys, keywords, megucaThreadCount, true);
+            if (token.cancelled) return;
+
+            const known = new Set(fetchedThreadsRef.current.map(t => `${t.boardKey}:${t.threadId}`));
+            const fresh = matches.filter(t => !known.has(`${t.boardKey}:${t.threadId}`));
+
+            if (fresh.length === 0) {
+                setStatus(summarize(loadedThreadsRef.current, mediaRef.current.length, failedThreadsRef.current));
+                showPageToast('No newly archived threads found.', null);
+                return;
+            }
+
+            fetchedThreadsRef.current = [...fetchedThreadsRef.current, ...fresh];
+
+            const before = mediaRef.current.length;
+            const firstKey = await loadThreadBatch([...fresh].reverse(), token);
+            if (token.cancelled) return;
+
+            const added = mediaRef.current.length - before;
+            showPageToast(
+                added > 0
+                    ? `${fresh.length} newly archived thread${fresh.length === 1 ? '' : 's'} · ${added} posts added below`
+                    : `${fresh.length} newly archived thread${fresh.length === 1 ? '' : 's'} · no media in ${fresh.length === 1 ? 'it' : 'them'}`,
+                added > 0 ? firstKey : null,
+            );
+        } catch (error) {
+            console.error('[LoadMore] Error:', error);
+            if (!token.cancelled) setStatus('Error checking for newly archived threads.');
+        } finally {
+            if (!token.cancelled) setIsLoadingMore(false);
+        }
+    }, [boardKeys, keywords, megucaThreadCount, isLoading, isLoadingMore, loadThreadBatch, showPageToast]);
 
     // ── Refresh ──
     const handleRefresh = useCallback(async () => {
@@ -111,21 +258,19 @@ function SearchPageContent() {
         setStatus('Checking for new posts...');
 
         try {
-            const results = await Promise.all(
-                fetchedThreadsRef.current.map(t => getThreadMedia(t.boardKey, t.threadId))
-            );
-
             const allMedia: MediaItem[] = [];
-            for (const items of results) allMedia.push(...items);
+            await fetchThreadMediaStream(fetchedThreadsRef.current, ({ media: items }) => {
+                allMedia.push(...items);
+            });
+
             const newMedia = allMedia.filter(m => !knownMediaIdsRef.current.has(`${m.boardKey}-${m.id}`));
 
             if (newMedia.length > 0) {
                 newMedia.sort((a, b) => a.tim - b.tim);
-                setMedia(prev => {
-                    const combined = [...prev, ...newMedia];
-                    for (const m of combined) knownMediaIdsRef.current.add(`${m.boardKey}-${m.id}`);
-                    return combined;
-                });
+                const combined = [...mediaRef.current, ...newMedia];
+                mediaRef.current = combined;
+                for (const m of newMedia) knownMediaIdsRef.current.add(`${m.boardKey}-${m.id}`);
+                setMedia(combined);
                 // Accumulate, don't replace: successive auto-refresh batches all
                 // stack below the same "New posts" line until the user scrolls to
                 // the bottom (which clears the set and merges them in).
@@ -134,9 +279,9 @@ function SearchPageContent() {
                     for (const m of newMedia) next.add(`${m.boardKey}-${m.id}`);
                     return next;
                 });
-                setStatus(`${threadCount} threads | ${knownMediaIdsRef.current.size} media items (+${newMedia.length} new)`);
+                setStatus(`${summarize(loadedThreadsRef.current, combined.length, failedThreadsRef.current)} (+${newMedia.length} new)`);
             } else {
-                setStatus(`${threadCount} threads | ${media.length} media items (no new posts)`);
+                setStatus(`${summarize(loadedThreadsRef.current, mediaRef.current.length, failedThreadsRef.current)} (no new posts)`);
             }
         } catch (error) {
             console.error('[Refresh] Error:', error);
@@ -144,7 +289,28 @@ function SearchPageContent() {
         } finally {
             setIsRefreshing(false);
         }
-    }, [isRefreshing, threadCount, media.length]);
+    }, [isRefreshing]);
+
+    // Put the anchored tile back under the reader. Runs before paint so an
+    // insert above the fold is never visible as a jump.
+    useLayoutEffect(() => {
+        const anchor = scrollAnchorRef.current;
+        if (!anchor) return;
+        scrollAnchorRef.current = null;
+        const el = tileFor(anchor.mkey);
+        if (!el) return;
+        const delta = el.getBoundingClientRect().top - anchor.top;
+        if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+    }, [media]);
+
+    // Opt-in trip to the start of a freshly archived thread's media, from the toast.
+    const jumpToPage = useCallback((mkey: string) => {
+        const el = tileFor(mkey);
+        if (!el) return;
+        scrollAnchorRef.current = null;
+        window.scrollTo({ top: window.scrollY + el.getBoundingClientRect().top - 80, behavior: 'smooth' });
+        setPageToast(null);
+    }, []);
 
     // ── Scroll handling: hide header on scroll down, show back-to-top ──
     useEffect(() => {
@@ -204,12 +370,14 @@ function SearchPageContent() {
         if (storedMs === 60000 || storedMs === 300000) setAutoRefreshMs(storedMs);
     }, []);
 
-    // Auto-refresh: periodically poll the open threads for new posts.
+    // Auto-refresh: periodically poll the open threads for new posts. Archived
+    // threads are dead by definition, so polling them is pure upstream load —
+    // and the archive's rate limit is shared with the paging the user does want.
     useEffect(() => {
-        if (!autoRefresh) return;
+        if (!autoRefresh || archivedParam) return;
         const id = setInterval(() => { handleRefresh(); }, autoRefreshMs);
         return () => clearInterval(id);
-    }, [autoRefresh, autoRefreshMs, handleRefresh]);
+    }, [autoRefresh, autoRefreshMs, archivedParam, handleRefresh]);
 
     const toggleAutoRefresh = useCallback(() => {
         setAutoRefresh(prev => {
@@ -393,7 +561,31 @@ function SearchPageContent() {
 
                 <Gallery ref={galleryRef} media={filteredMedia} newItemIds={newItemIds} />
 
-                {media.length > 0 && (
+                {/* Archive mode checks for threads archived since the search; live
+                    mode polls the open threads for new posts. The two are mutually
+                    exclusive — nothing new is coming to a dead thread, so neither
+                    the refresh button nor the auto-refresh toggle belongs there. */}
+                {media.length > 0 && archivedParam && (
+                    <div className="flex flex-col items-center gap-2.5 pt-3 pb-6">
+                        <button
+                            onClick={handleLoadMore}
+                            disabled={isLoadingMore || isLoading}
+                            className="
+                                flex items-center gap-2 px-5 py-2
+                                bg-[var(--bg-surface)] border border-[var(--border)]
+                                text-[var(--text-secondary)] rounded-lg text-sm
+                                transition-all duration-150 disabled:opacity-40 cursor-pointer
+                                hover:border-[var(--accent)] hover:text-[var(--accent)] hover:shadow-[0_0_12px_-3px_var(--accent-glow)]
+                                active:scale-95
+                            "
+                        >
+                            <History size={15} className={isLoadingMore ? 'animate-spin' : ''} />
+                            {isLoadingMore ? 'Checking...' : 'Load more posts'}
+                        </button>
+                    </div>
+                )}
+
+                {media.length > 0 && !archivedParam && (
                     <div className="flex flex-col items-center gap-2.5 pt-3 pb-6">
                         <button
                             onClick={handleRefresh}
@@ -477,6 +669,29 @@ function SearchPageContent() {
                     <ChevronDown size={24} />
                 </button>
             </div>
+
+            {/* Archive check toast — same construction as the download toasts, in
+                the pink accent rather than emerald, dropping in from the top edge. */}
+            {pageToast && (
+                <div className="fixed top-3 left-0 right-0 z-50 flex justify-center px-4 pointer-events-none">
+                    <div
+                        className={`flex items-center gap-3 max-w-[min(34rem,92vw)] rounded-xl border border-[color:color-mix(in_srgb,var(--accent)_55%,transparent)] bg-[color:color-mix(in_srgb,var(--accent)_18%,var(--bg-elevated))] px-4 py-3 text-[15px] text-[var(--text-primary)] shadow-xl backdrop-blur-sm ${pageToast.exiting ? 'drop-toast-exit' : 'drop-toast-enter'}`}
+                    >
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-white">
+                            <History size={16} strokeWidth={2.5} />
+                        </span>
+                        <span className="truncate">{pageToast.text}</span>
+                        {pageToast.jumpTo && (
+                            <button
+                                onClick={() => jumpToPage(pageToast.jumpTo!)}
+                                className="pointer-events-auto shrink-0 rounded-md border border-[color:color-mix(in_srgb,var(--accent)_55%,transparent)] px-2.5 py-1 text-[13px] text-[var(--text-secondary)] transition-colors duration-150 cursor-pointer hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                            >
+                                Jump to them
+                            </button>
+                        )}
+                    </div>
+                </div>
+            )}
 
             {filteredMedia.length > 0 && <TimeScrollbar />}
         </div>

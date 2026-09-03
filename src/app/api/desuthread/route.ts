@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import axios from 'axios';
+import { desuGet } from '@/lib/server/desuLimiter';
 
 /**
  * Fetch a thread from desuarchive (foolfuuka).
  * GET /api/desuthread?board=mu&id=129476911
  *
- * Returns the thread data in foolfuuka format.
+ * Returns the thread data in foolfuuka format. Goes through the shared limiter
+ * so a wide archive batch queues instead of tripping the upstream rate limit and
+ * losing threads (see desuLimiter).
  */
 export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
@@ -21,15 +23,8 @@ export async function GET(request: NextRequest) {
 
         console.log(`[Desuarchive Thread] Fetching: ${threadUrl}`);
 
-        const response = await axios.get(threadUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                'Accept': 'application/json',
-            },
-            timeout: 30000,
-        });
-
-        return NextResponse.json(response.data);
+        const data = await desuGet(threadUrl);
+        return NextResponse.json(data);
     } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : String(error);
         console.error(`[Desuarchive Thread] Error fetching ${board}/${id}:`, msg);
