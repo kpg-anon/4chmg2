@@ -13,7 +13,7 @@
 </p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.6.0-E445FF?style=for-the-badge" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.6.1-E445FF?style=for-the-badge" alt="Version">
   <img src="https://img.shields.io/badge/next.js-16-000000?style=for-the-badge&logo=next.js&logoColor=white" alt="Next.js 16">
   <img src="https://img.shields.io/badge/license-MIT-3B82F6?style=for-the-badge" alt="License: MIT">
 </p>
@@ -34,14 +34,14 @@
 ---
 
 > [!NOTE]
-> **v1.6.0.** New this release: archive searches now return **every thread you asked for** instead of quietly dropping the ones the archive rate-limited away — the same query that rendered 786 media items now returns 1692. Results **fill in thread by thread** as they arrive, the thread count is **accurate past 15**, and archive mode swaps live polling for a **"Load more posts"** check that picks up threads archived since you searched. K-pop-oriented by default, general-purpose by design.
+> **v1.6.1.** New this release: auto-refresh now **follows a general across thread rollovers**, so a search left open no longer goes quiet on every board but the slowest one. Behind it, v1.6.0 made archive searches return **every thread you asked for** instead of quietly dropping the ones the archive rate-limited away — the same query that rendered 786 media items now returns 1692. K-pop-oriented by default, general-purpose by design.
 
 <!-- ───────────────────────────── TOC ───────────────────────────── -->
 <details>
 <summary><b>📖 Table of contents</b></summary>
 
 - [Why 4CHMG2](#-why-4chmg2)
-- [What's new in 1.6.0](#-whats-new-in-160)
+- [What's new in 1.6.1](#-whats-new-in-161)
 - [Features](#-features)
 - [Showcase](#-showcase)
 - [Supported boards](#-supported-boards)
@@ -66,7 +66,11 @@ Imageboards scatter the same media across a dozen boards and archives. Finding e
 | ⚡ | **Fast by default** | A self-hosted proxy with aggressive thumbnail caching keeps scrolling smooth — no skeleton flashes. |
 | 🎛️ | **Yours to configure** | Add, hide, or remove boards right in the browser — no source edits required. |
 
-## 🚀 What's new in 1.6.0
+## 🚀 What's new in 1.6.1
+
+- 🔄 **Auto-refresh follows generals across rollovers** — a search left open used to go quiet on every board but one. Refresh re-polled only the threads that existed when you searched, so the moment a general was replaced by its successor that board stopped updating for good, while a board sitting on one long-lived general kept going. Refresh now notices when a thread is done — 4chan's bump and image limits, a locked Mokachan thread, a closed 2ch thread, or a deleted one — and only then goes looking for the replacement, so a busy board keeps up without a quiet one costing any extra requests.
+
+### Also in 1.6.0
 
 - 🗄️ **Archive searches return the whole result set** — opening every thread at once made the archive rate-limit the batch, and each rejected fetch was silently treated as a thread with no media. Half your results could disappear with nothing to indicate it: the same `/trash/` search at 11 threads rendered **786 media items where it should have rendered 1692**. Archive requests now share one queue that paces and retries them, so a wide batch takes a few seconds longer instead of arriving half-empty.
 - ⏳ **Results fill in as they arrive** — media appears thread by thread with a running `Loading 4/11 threads` count, rather than waiting on the slowest fetch. A thread that genuinely can't be loaded is now reported instead of vanishing.

@@ -60,6 +60,11 @@ interface FourchanPost {
     filename?: string;
     time?: number;
     fsize?: number;
+    // Only present on the OP, and only once tripped.
+    bumplimit?: number;
+    imagelimit?: number;
+    closed?: number;
+    archived?: number;
 }
 
 interface FourchanThreadResponse {
@@ -122,6 +127,7 @@ interface MegucaPost {
 
 interface MegucaThreadResponse extends MegucaPost {
     posts?: MegucaPost[];
+    locked?: boolean;
 }
 
 // 2ch.org (Dvach) types
@@ -158,6 +164,7 @@ interface DvachPost {
 
 interface DvachThreadResponse {
     threads?: Array<{ posts?: DvachPost[] }>;
+    is_closed?: number | boolean;
 }
 
 // meguca's FileType enum. Verified against live mokachan payloads for the types
@@ -455,15 +462,47 @@ export async function searchDesuarchive(
     }
 }
 
+export interface ThreadFetch {
+    media: MediaItem[];
+    /**
+     * Upstream says this thread is done taking posts — 4chan's bump/image limit,
+     * a locked meguca thread, a closed 2ch thread. A general that hits this is
+     * about to be replaced by its successor, which is the cue for auto-refresh to
+     * go looking for a new thread instead of polling a dead one forever.
+     */
+    full: boolean;
+}
+
+/**
+ * Read the "no more posts coming" flag out of a raw thread payload. All three
+ * live sources expose one, and it rides along on the poll we already make, so
+ * detecting a rollover costs no extra request.
+ */
+function isThreadFull(data: unknown, source: BoardSource, isMeguca: boolean): boolean {
+    if (!data || typeof data !== 'object') return false;
+
+    if (source === 'dvach') {
+        return Boolean((data as DvachThreadResponse).is_closed);
+    }
+    if (isMeguca) {
+        return Boolean((data as MegucaThreadResponse).locked);
+    }
+    // 4chan puts these on the OP, and only once tripped. imagelimit counts for a
+    // media gallery: past it the thread keeps talking but stops producing files.
+    const op = (data as FourchanThreadResponse).posts?.[0];
+    if (!op) return false;
+    return Boolean(op.bumplimit || op.imagelimit || op.closed || op.archived);
+}
+
 // Thread Media Extraction
 //
 // Throws when the thread can't be fetched. It used to swallow the error and
 // return an empty list, which made a rate-limited archive batch indistinguishable
 // from a thread that genuinely has no media — the gallery just rendered fewer
 // items with no indication anything was missing.
-export async function getThreadMedia(boardKey: string, threadId: number): Promise<MediaItem[]> {
+export async function getThreadMedia(boardKey: string, threadId: number): Promise<ThreadFetch> {
     const cacheKey = `thread:${boardKey}:${threadId}`;
-    const cached = getCached<MediaItem[]>(cacheKey);
+    const cached = getCached<ThreadFetch>(cacheKey);
     if (cached) return cached;
 
     const config = getBoardByKey(boardKey);
@@ -479,9 +518,13 @@ export async function getThreadMedia(boardKey: string, threadId: number): Promis
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             data = await response.json();
 
-            const media = extractDesuarchiveMedia(data, boardKey, config.id, threadId);
-            setCache(cacheKey, media);
-            return media;
+            // Archived threads are dead by definition.
+            const result: ThreadFetch = {
+                media: extractDesuarchiveMedia(data, boardKey, config.id, threadId),
+                full: true,
+            };
+            setCache(cacheKey, result);
+            return result;
         }
 
         const response = await fetch(`/api/thread?key=${encodeURIComponent(boardKey)}&id=${threadId}`);
@@ -497,8 +540,12 @@ export async function getThreadMedia(boardKey: string, threadId: number): Promis
             media = extractFourchanMedia(data, boardKey, config.id, threadId);
         }
 
-        setCache(cacheKey, media);
-        return media;
+        const result: ThreadFetch = {
+            media,
+            full: isThreadFull(data, config.source, config.isMeguca),
+        };
+        setCache(cacheKey, result);
+        return result;
     } catch (error) {
         console.error(`[API] Error fetching thread ${boardKey}/${threadId}:`, error);
         throw error;
@@ -519,7 +566,7 @@ export const THREAD_FETCH_CONCURRENCY = 3;
 
 export async function fetchThreadMediaStream(
     threads: ThreadMatch[],
-    onThread: (result: { thread: ThreadMatch; media: MediaItem[]; ok: boolean }) => void,
+    onThread: (result: { thread: ThreadMatch; media: MediaItem[]; ok: boolean; full: boolean }) => void,
     signal?: { cancelled: boolean },
 ): Promise<void> {
     let cursor = 0;
@@ -529,10 +576,12 @@ export async function fetchThreadMediaStream(
             if (signal?.cancelled) return;
             const thread = threads[cursor++];
             try {
-                const media = await getThreadMedia(thread.boardKey, thread.threadId);
-                if (!signal?.cancelled) onThread({ thread, media, ok: true });
+                const { media, full } = await getThreadMedia(thread.boardKey, thread.threadId);
+                if (!signal?.cancelled) onThread({ thread, media, ok: true, full });
             } catch {
-                if (!signal?.cancelled) onThread({ thread, media: [], ok: false });
+                // A thread that 404s has been pruned, which is itself a reason to
+                // go looking for its replacement.
+                if (!signal?.cancelled) onThread({ thread, media: [], ok: false, full: true });
             }
         }
     };

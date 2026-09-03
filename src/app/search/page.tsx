@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, Suspense } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, Suspense } from 'react';
 import { Check, ChevronUp, ChevronDown, RefreshCw, Funnel, SlidersHorizontal, X, History } from 'lucide-react';
 import { parseBoardKeys } from '@/lib/boards';
 import { searchThreads, fetchThreadMediaStream, type MediaItem, type ThreadMatch } from '@/lib/api';
@@ -63,6 +63,10 @@ function SearchPageContent() {
 
     const didFetchRef = useRef('');
     const fetchedThreadsRef = useRef<ThreadMatch[]>([]);
+    // The result set the page originally loaded. Kept separate so refresh can
+    // re-derive what to poll without the tracked set growing without bound as
+    // generals roll over across a long session.
+    const originalThreadsRef = useRef<ThreadMatch[]>([]);
     const knownMediaIdsRef = useRef(new Set<string>());
     // Media is merged incrementally from a ref rather than from `media` state so
     // successive thread arrivals don't race each other's setState.
@@ -84,8 +88,11 @@ function SearchPageContent() {
     const galleryRef = useRef<GalleryHandle>(null);
     const newItemIdsRef = useRef(newItemIds);
 
-    const boardKeys = parseBoardKeys(boardParam);
-    const keywords = queryParam.split('|').filter(Boolean);
+    // Memoised because the auto-refresh interval is rebuilt whenever its
+    // callback identity changes. Fresh arrays every render would tear down and
+    // restart the timer on each one, so the 5m tick could never come due.
+    const boardKeys = useMemo(() => parseBoardKeys(boardParam), [boardParam]);
+    const keywords = useMemo(() => queryParam.split('|').filter(Boolean), [queryParam]);
     const megucaThreadCount = parseInt(threadsParam, 10) || 1;
 
     const showPageToast = useCallback((text: string, jumpTo: string | null) => {
@@ -167,6 +174,7 @@ function SearchPageContent() {
             setFilenameRegex(false);
             setFilenameFilterOpen(false);
             fetchedThreadsRef.current = [];
+            originalThreadsRef.current = [];
             loadedThreadsRef.current = 0;
             failedThreadsRef.current = 0;
             setPageToast(null);
@@ -185,6 +193,7 @@ function SearchPageContent() {
                 }
 
                 fetchedThreadsRef.current = matches;
+                originalThreadsRef.current = matches;
                 setStatus(`Found ${matches.length} threads. Fetching media...`);
 
                 // Oldest first, so each thread's media appends below the last
@@ -259,9 +268,48 @@ function SearchPageContent() {
 
         try {
             const allMedia: MediaItem[] = [];
-            await fetchThreadMediaStream(fetchedThreadsRef.current, ({ media: items }) => {
+            // A tracked thread that has hit its bump/image limit, been locked or
+            // closed, or 404'd is about to be (or already has been) replaced by a
+            // successor. That's the only situation where re-running the search can
+            // turn up anything, so it's the only situation we spend the catalog
+            // requests on — a busy board like /mu/ rolls over constantly while
+            // /trash/ sits on one general for days.
+            let rollover = false;
+            await fetchThreadMediaStream(fetchedThreadsRef.current, ({ media: items, full }) => {
                 allMedia.push(...items);
+                if (full) rollover = true;
             });
+
+            if (rollover) {
+                try {
+                    const matches = await searchThreads(boardKeys, keywords, megucaThreadCount, archivedParam);
+                    const keyOf = (t: ThreadMatch) => `${t.boardKey}:${t.threadId}`;
+                    // Poll the original result set (whose media is already on
+                    // screen) plus whatever the search returns now. Threads that
+                    // have rolled out of both stop being polled, so a long session
+                    // doesn't accumulate dead threads.
+                    const seen = new Set(originalThreadsRef.current.map(keyOf));
+                    const tracked = [...originalThreadsRef.current];
+                    const discovered: ThreadMatch[] = [];
+                    for (const m of matches) {
+                        if (seen.has(keyOf(m))) continue;
+                        seen.add(keyOf(m));
+                        tracked.push(m);
+                        if (!fetchedThreadsRef.current.some(t => keyOf(t) === keyOf(m))) discovered.push(m);
+                    }
+                    fetchedThreadsRef.current = tracked;
+
+                    if (discovered.length > 0) {
+                        console.log(`[Refresh] ${discovered.length} new thread(s) since the search:`, discovered.map(keyOf));
+                        await fetchThreadMediaStream(discovered, ({ media: items }) => {
+                            allMedia.push(...items);
+                        });
+                    }
+                } catch (error) {
+                    // Discovery is best-effort; the poll above already succeeded.
+                    console.error('[Refresh] Thread discovery failed:', error);
+                }
+            }
 
             const newMedia = allMedia.filter(m => !knownMediaIdsRef.current.has(`${m.boardKey}-${m.id}`));
 
@@ -289,7 +337,7 @@ function SearchPageContent() {
         } finally {
             setIsRefreshing(false);
         }
-    }, [isRefreshing]);
+    }, [isRefreshing, boardKeys, keywords, megucaThreadCount, archivedParam]);
 
     // Put the anchored tile back under the reader. Runs before paint so an
     // insert above the fold is never visible as a jump.

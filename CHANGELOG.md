@@ -1,6 +1,13 @@
 # Changelog
 
 ## 2026-09-03
+### Auto-refresh follows generals across thread rollovers (v1.6.1)
+- **A multi-board search left open would go quiet on every board but one** — auto-refresh re-polled only the thread ids captured when the search ran, and never looked for new ones. The moment a general rolled over to its successor (or an ephemeral thread 404'd), that board stopped producing updates for good, while a board sitting on one long-lived general kept going. On `4ch:mu,4ch:trash,mokachan:kr,dvach:kpop` that reads as "I only ever get /trash/": `/mu/` generals roll every few hours, `/trash/` sits on one for days
+- **Rediscovery is triggered by the thread itself, not by a timer** — the refresh poll already fetches each thread's payload, and every live source states when a thread is done: 4chan's `bumplimit` / `imagelimit` (plus `closed` / `archived`), meguca's `locked`, 2ch's `is_closed`. A 404 counts too. Only when one of those trips does refresh re-run the search, so a busy board picks up its successor while a quiet one costs no extra catalog requests at all
+- **The tracked set stays bounded** — refresh polls the original result set plus whatever the search returns now, so threads that have rolled out of both stop being polled instead of accumulating across a long session
+- **Fixed the auto-refresh interval being torn down every render** — the timer is rebuilt whenever its callback identity changes, and the board list and keyword array were rebuilt as fresh arrays on each render, so the 5m tick could be reset before it ever came due
+
+## 2026-09-03
 ### Archive search returns everything it says it does (v1.6.0)
 - **Archive batches no longer silently lose half their threads** — the gallery opened every thread in the batch at once, and desuarchive answers `429` to bursts that wide. Each failed fetch was swallowed into an empty media list, so an 11-thread archive search rendered ~6 threads' worth of media and looked like the archive simply had less in it. Measured on `/trash/` + "kpop" with N=11: **786 media items before, 1692 after**, with 5 of 11 thread fetches previously failing and 0 failing now. All server-side archive traffic (thread fetches, search paging, and the proxy's dead-media post lookups) now shares one queue with capped concurrency, spaced starts, and `Retry-After`-aware retry, so a wide batch queues instead of being dropped
 - **Threads load progressively** — media appears thread by thread as each one lands rather than waiting on the slowest fetch, with a running `Loading X/N threads` count. A thread that genuinely can't be fetched is now reported (`N threads unavailable`) instead of vanishing
