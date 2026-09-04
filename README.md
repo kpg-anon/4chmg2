@@ -41,7 +41,7 @@
 <summary><b>📖 Table of contents</b></summary>
 
 - [Why 4CHMG2](#-why-4chmg2)
-- [What's new in 1.6.1](#-whats-new-in-161)
+- [What's new in 1.6.2](#-whats-new-in-162)
 - [Features](#-features)
 - [Showcase](#-showcase)
 - [Supported boards](#-supported-boards)
@@ -66,9 +66,9 @@ Imageboards scatter the same media across a dozen boards and archives. Finding e
 | ⚡ | **Fast by default** | A self-hosted proxy with aggressive thumbnail caching keeps scrolling smooth — no skeleton flashes. |
 | 🎛️ | **Yours to configure** | Add, hide, or remove boards right in the browser — no source edits required. |
 
-## 🚀 What's new in 1.6.1
+## 🚀 What's new in 1.6.2
 
-- 🔄 **Auto-refresh follows generals across rollovers** — a search left open used to go quiet on every board but one. Refresh re-polled only the threads that existed when you searched, so the moment a general was replaced by its successor that board stopped updating for good, while a board sitting on one long-lived general kept going. Refresh now notices when a thread is done — 4chan's bump and image limits, a locked Mokachan thread, a closed 2ch thread, or a deleted one — and only then goes looking for the replacement, so a busy board keeps up without a quiet one costing any extra requests.
+- 🩹 **A stalled upstream transfer no longer becomes a broken tile** — 2ch media intermittently failed to load with a `500`. Its origin stalls now and then on full-size files that miss Cloudflare's cache, and the proxy turned any such stall into a hard error; thumbnails were unaffected, which made it look board-specific rather than size-specific. Failed fetches are now retried with backoff, and each attempt is bounded both by silence and by total time — so a slow transfer gets abandoned and retried instead of dragging on past the point nginx will wait.
 
 ## 🧰 Features
 

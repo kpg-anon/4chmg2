@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-04
+### A stalled upstream transfer no longer becomes a broken tile (v1.6.2)
+- **2ch media that intermittently failed with a 500 now loads** — 2ch.org's origin behind Cloudflare stalls now and then on full-size files that miss the edge cache, and the proxy turned any such stall into a hard `500`. Thumbnails were never affected, which is what made it look board-specific rather than size-specific: they're small and almost always served from Cloudflare's cache, while a `src/` miss is pulled from the origin. The proxy now retries a failed fetch up to three times with backoff, which lands on a by-then-warm edge and returns in milliseconds
+- **Only genuinely transient failures retry** — timeouts, connection errors, and `5xx`. A `4xx` deliberately does not, so a pruned 4chan file still falls straight through to the desuarchive fallback with no added latency
+- **Slow transfers are now bounded, not just silent ones** — a single 30s inactivity timer could not end a transfer that kept dribbling bytes: one 3 MB mp4 trickled for 265s, resetting that timer over and over, long past the 120s nginx allows the app to answer in. There are now two limits per attempt — 10s of silence, or 30s overall — so three attempts plus backoff worst-case at 92s and a doomed fetch surfaces as our own error (and the archive fallback) rather than a bare `504` from nginx
+- **Fixed a socket leak on redirects** — the proxy followed a `3xx` without reading its body, and an unconsumed response keeps its socket checked out of the keep-alive pool permanently, so every redirect permanently cost one of the 64 sockets for that host. Redirect chains now also share one deadline budget instead of getting a fresh one per hop
+
 ## 2026-09-03
 ### Auto-refresh follows generals across thread rollovers (v1.6.1)
 - **A multi-board search left open would go quiet on every board but one** — auto-refresh re-polled only the thread ids captured when the search ran, and never looked for new ones. The moment a general rolled over to its successor (or an ephemeral thread 404'd), that board stopped producing updates for good, while a board sitting on one long-lived general kept going. On `4ch:mu,4ch:trash,mokachan:kr,dvach:kpop` that reads as "I only ever get /trash/": `/mu/` generals roll every few hours, `/trash/` sits on one for days

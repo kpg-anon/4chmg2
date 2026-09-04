@@ -32,6 +32,53 @@ export class UpstreamHttpError extends Error {
     }
 }
 
+/**
+ * The transfer never finished in time. Two distinct shapes, both retryable:
+ * - `stalled`   — the socket went silent for INACTIVITY_MS mid-body.
+ * - `deadline`  — bytes kept trickling but the whole attempt blew its budget.
+ *
+ * Both are needed. A pure inactivity timer does not bound a slow transfer: a
+ * 2026-09-04 incident had 2ch.org dribbling a 3 MB mp4 for 265 s (resetting a
+ * 30 s inactivity timer over and over) before going quiet, which blew nginx's
+ * 120 s proxy_read_timeout long before this layer gave up.
+ */
+export class UpstreamTimeoutError extends Error {
+    constructor(public readonly url: string, public readonly reason: 'stalled' | 'deadline') {
+        super(reason === 'stalled'
+            ? `Stalled (no data for ${INACTIVITY_MS}ms) fetching ${url}`
+            : `Deadline (${DEADLINE_MS}ms) exceeded fetching ${url}`);
+        this.name = 'UpstreamTimeoutError';
+    }
+}
+
+// Budget per attempt. Three attempts plus backoff worst-cases at ~92 s, which
+// stays under nginx's 120 s proxy_read_timeout so a slow fetch surfaces as our
+// own error (and the archive fallback) rather than a bare 504 from nginx.
+const INACTIVITY_MS = 10_000;
+const DEADLINE_MS = 30_000;
+const MAX_ATTEMPTS = 3;
+const RETRY_BACKOFF_MS = [500, 1500];
+
+const RETRYABLE_CODES = new Set([
+    'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE',
+    'EAI_AGAIN', 'ENOTFOUND', 'ECONNABORTED', 'EHOSTUNREACH',
+]);
+
+/**
+ * GET is idempotent, so anything that looks like a transport hiccup is worth
+ * another shot. 4xx deliberately is not: a 404 has to fall straight through to
+ * the archive fallback, and retrying a 403 just burns the budget.
+ */
+function isRetryable(error: unknown): boolean {
+    if (error instanceof UpstreamTimeoutError) return true;
+    if (error instanceof UpstreamHttpError) return error.status >= 500;
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code && RETRYABLE_CODES.has(code)) return true;
+    return error instanceof Error && /socket hang up/i.test(error.message);
+}
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 // Per-domain cookie storage so easychan and mokachan don't bleed into each other
 const cookieStore = new Map<string, string[]>();
 let cachedUserAgent = '';
@@ -98,7 +145,25 @@ export async function fetchImage(url: string): Promise<Buffer> {
     else if (url.includes('2ch.org')) referer = 'https://2ch.org/';
 
     console.log(`[Image Proxy] Fetching: ${url}${cookieHeader ? ' (with cookies)' : ''}`);
-    return fetchDirect(url, userAgent, referer, cookieHeader);
+
+    // 2ch.org's origin stalls intermittently on full-size files that miss
+    // Cloudflare's edge cache; the retry almost always lands on a warm edge and
+    // returns in milliseconds. Without it a single stall became a hard 500,
+    // because the archive fallback in the proxy only triggers on a 404.
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+            return await fetchDirect(url, userAgent, referer, cookieHeader);
+        } catch (error: unknown) {
+            lastError = error;
+            if (attempt === MAX_ATTEMPTS || !isRetryable(error)) break;
+            const delay = RETRY_BACKOFF_MS[attempt - 1];
+            const msg = error instanceof Error ? error.message : String(error);
+            console.warn(`[Image Proxy] Attempt ${attempt}/${MAX_ATTEMPTS} failed (${msg}) — retrying in ${delay}ms`);
+            await sleep(delay);
+        }
+    }
+    throw lastError;
 }
 
 const MAX_REDIRECTS = 5;
@@ -109,12 +174,32 @@ function fetchDirect(
     referer: string,
     cookieHeader: string,
     depth: number = 0,
+    deadlineAt: number = Date.now() + DEADLINE_MS,
 ): Promise<Buffer> {
     return new Promise((resolve, reject) => {
         if (depth >= MAX_REDIRECTS) {
             reject(new Error(`Too many redirects fetching ${url}`));
             return;
         }
+
+        // Redirects share one budget with the original request, so a chain
+        // can't quietly multiply the deadline by MAX_REDIRECTS.
+        const msLeft = deadlineAt - Date.now();
+        if (msLeft <= 0) {
+            reject(new UpstreamTimeoutError(url, 'deadline'));
+            return;
+        }
+
+        let deadlineTimer: NodeJS.Timeout | undefined;
+        let settled = false;
+        const settle = (fn: () => void) => {
+            if (settled) return;
+            settled = true;
+            if (deadlineTimer) clearTimeout(deadlineTimer);
+            fn();
+        };
+        const succeed = (buffer: Buffer) => settle(() => resolve(buffer));
+        const fail = (error: Error) => settle(() => reject(error));
 
         const isHttps = url.startsWith('https://');
         const headers: Record<string, string> = {
@@ -135,37 +220,55 @@ function fetchDirect(
         }, (res) => {
             // Follow redirects
             if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                // Drain the redirect body first. An unconsumed response keeps
+                // its socket checked out of the keep-alive agent forever, so
+                // every redirect would otherwise burn one of the 64 sockets
+                // for that host until the pool ran dry.
+                res.resume();
+
                 let location = res.headers.location;
                 // Resolve relative redirect URLs against the current URL
                 if (!location.startsWith('http://') && !location.startsWith('https://')) {
                     try {
                         location = new URL(location, url).href;
                     } catch {
-                        reject(new Error(`Invalid redirect location: ${location}`));
+                        fail(new Error(`Invalid redirect location: ${location}`));
                         return;
                     }
                 }
-                fetchDirect(location, userAgent, referer, cookieHeader, depth + 1)
-                    .then(resolve)
-                    .catch(reject);
+                // Hand the remaining budget to the follow-up and stand down, so
+                // this request's timer can't fire against an orphaned socket.
+                if (deadlineTimer) {
+                    clearTimeout(deadlineTimer);
+                    deadlineTimer = undefined;
+                }
+                fetchDirect(location, userAgent, referer, cookieHeader, depth + 1, deadlineAt)
+                    .then(succeed)
+                    .catch(fail);
                 return;
             }
 
             const chunks: Buffer[] = [];
             res.on('data', (chunk: Buffer) => chunks.push(chunk));
+            res.on('error', fail);
             res.on('end', () => {
                 if (res.statusCode && res.statusCode >= 400) {
-                    reject(new UpstreamHttpError(res.statusCode, url));
+                    fail(new UpstreamHttpError(res.statusCode, url));
                 } else {
-                    resolve(Buffer.concat(chunks));
+                    succeed(Buffer.concat(chunks));
                 }
             });
         });
 
-        req.on('error', reject);
-        req.setTimeout(30000, () => {
-            req.destroy(new Error(`Timeout fetching ${url}`));
+        req.on('error', fail);
+        // Inactivity: the socket went silent mid-transfer.
+        req.setTimeout(INACTIVITY_MS, () => {
+            req.destroy(new UpstreamTimeoutError(url, 'stalled'));
         });
+        // Overall: bytes are arriving, just far too slowly to be worth waiting on.
+        deadlineTimer = setTimeout(() => {
+            req.destroy(new UpstreamTimeoutError(url, 'deadline'));
+        }, msLeft);
         req.end();
     });
 }
