@@ -26,7 +26,7 @@ upstream 4chmg2_backend {
     keepalive 32;
 }
 
-proxy_cache_path /var/cache/nginx/4chmg2 levels=1:2 keys_zone=media_cache:10m max_size=5g inactive=30d use_temp_path=off;
+proxy_cache_path /var/cache/nginx/4chmg2 levels=1:2 keys_zone=media_cache:10m max_size=2g inactive=30d use_temp_path=off;
 
 # HTTP server — certbot will add HTTPS and redirect automatically
 server {

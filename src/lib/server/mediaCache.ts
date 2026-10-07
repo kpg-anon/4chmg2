@@ -6,11 +6,12 @@ import { Readable } from 'stream';
 
 const CACHE_DIR = join(process.cwd(), '.media-cache');
 
-// Cap the disk cache so aggressive prefetch can't fill a 50 GB VPS. The OS
-// page cache + nginx's 5 GB layer sit in front of this, so even a modest cap
-// gives effectively-instant repeat fetches for hot content.
-const MAX_CACHE_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB
-const EVICT_TARGET_BYTES = 8 * 1024 * 1024 * 1024; // drop to 8 GB on overflow
+// Cap the disk cache so aggressive prefetch can't fill a 50 GB VPS that is
+// shared with another site. The OS page cache + nginx's 2 GB layer sit in
+// front of this, so even a modest cap gives effectively-instant repeat
+// fetches for hot content.
+const MAX_CACHE_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
+const EVICT_TARGET_BYTES = 1.6 * 1024 * 1024 * 1024; // drop to 1.6 GB on overflow
 const CACHE_CHECK_EVERY_N_WRITES = 250;
 
 let writesSinceCheck = 0;
